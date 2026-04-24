@@ -70,21 +70,6 @@ F4SEMenuFramework::SetSection("My Mod Name");
 F4SEMenuFramework::AddSectionItem("Page Title", MyRenderFunction);
 ```
 
-### Open/close-aware windows
-
-```cpp
-// Pausing window (game freezes while open)
-MENU_WINDOW MyWindow = F4SEMenuFramework::AddWindow(MyMod::RenderWindow);
-
-// Non-pausing overlay (game runs normally)
-MENU_WINDOW MyOverlay = F4SEMenuFramework::AddWindow(MyMod::RenderOverlay, false);
-
-// Control visibility from anywhere
-MyWindow->IsOpen = true;
-```
-
-Non-blocking windows survive main-menu close — set `IsOpen = true` at init time for a permanent HUD overlay.
-
 ### HUD foreground overlays
 
 ```cpp
@@ -150,7 +135,7 @@ auto* evt = new F4SEMenuFramework::Model::Event(OnMenuEvent);
 - Visual Studio 2022
 - [CMake](https://cmake.org/) 3.21+
 - [vcpkg](https://github.com/microsoft/vcpkg) (set `VCPKG_ROOT` environment variable)
-- [CommonLibF4](https://github.com/Ryan-rsm-McKenzie/CommonLibF4) cloned to `../PluginTemplate/CommonLibF4/CommonLibF4/`
+- [CommonLibF4](https://github.com/Ryan-rsm-McKenzie/CommonLibF4) 
 
 ### Environment variables
 
