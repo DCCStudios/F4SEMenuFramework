@@ -1,0 +1,15 @@
+{
+  "ModControlPanel": "Mod Control Panel",
+  "Options": "Options (X) \uf0d7",
+  "Options.ResumeGame": "Resume Game",
+  "Options.OpenSettings": "Open Settings",
+
+  "Settings.Title": "Settings",
+  "Settings.MenuStyle": "Menu Style:",
+  "Settings.FreezeTime": "Freeze Time",
+  "Settings.BlurBackground": "Blur Background",
+  "Settings.ToggleMode.Keyboard": "Toggle Mode (Keyboard):",
+  "Settings.ToggleKey.Keyboard": "Toggle Key (Keyboard):",
+  "Settings.ToggleMode.Gamepad": "Toggle Mode (Gamepad):",
+  "Settings.ToggleKey.Gamepad": "Toggle Key (Gamepad):"
+}

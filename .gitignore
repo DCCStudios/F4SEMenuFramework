@@ -1,0 +1,18 @@
+# IDE
+.idea/
+.vs/
+.vscode/settings.json
+*.user
+*.aps
+*.suo
+
+# CMake build directories
+build/
+cmake-build*/
+install/
+
+# Compiled output
+Compile/
+
+# vcpkg installed packages (fetched on configure)
+**/vcpkg_installed/

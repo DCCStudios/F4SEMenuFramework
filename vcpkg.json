@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "f4semenuframework",
+  "version-string": "3.0.0.0",
+  "dependencies": [
+    "boost-stl-interfaces",
+    "boost-iostreams",
+    "boost-iterator",
+    "boost-predef",
+    "fmt",
+    "frozen",
+    "simpleini",
+    "spdlog",
+    "xbyak",
+    "nanosvg",
+    "rapidcsv",
+    "directxmath",
+    "directxtk",
+    "nlohmann-json",
+    "rsm-mmio"
+  ]
+}
