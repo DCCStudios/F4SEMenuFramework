@@ -2,6 +2,12 @@
 //based on imgui.h file version "1.90.8" 19080 from Dear ImGui https://github.com/ocornut/imgui
 //with imgui_internal.h api
 //docking branch
+
+// Defensive null guard: ImHashStr (called by every label-using widget) will crash
+// immediately on a null pointer. Third-party plugins that pass null labels would
+// otherwise take down the entire game. Replace null with "" so ImGui renders
+// nothing but doesn't fault.
+static inline const char* safe_str(const char* s) noexcept { return s ? s : ""; }
 #ifdef IMGUI_ENABLE_FREETYPE
 #ifndef CIMGUI_FREETYPE
 #error "IMGUI_FREETYPE should be defined for Freetype linking"

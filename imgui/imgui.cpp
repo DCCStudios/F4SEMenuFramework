@@ -2161,6 +2161,7 @@ ImGuiID ImHashData(const void* data_p, size_t data_size, ImGuiID seed)
 // FIXME-OPT: Replace with e.g. FNV1a hash? CRC32 pretty much randomly access 1KB. Need to do proper measurements.
 ImGuiID ImHashStr(const char* data_p, size_t data_size, ImGuiID seed)
 {
+    if (!data_p) return seed; // null guard: plugins may pass null labels
     seed = ~seed;
     ImU32 crc = seed;
     const unsigned char* data = (const unsigned char*)data_p;
