@@ -4,35 +4,6 @@ A port of [SKSE Menu Framework 3](https://github.com/QTR-Modding/SKSE-Menu-Frame
 
 Provides a shared in-game Mod Control Panel rendered with [Dear ImGui](https://github.com/ocornut/imgui) via a DirectX 11 overlay. Any F4SE plugin can register menu sections, popout windows, HUD overlays, and input callbacks without shipping its own rendering infrastructure.
 
----
-
-## Features
-
-- **Mod Control Panel** — a unified, searchable settings menu shared across all plugins that use the framework
-- **Popout windows** — pausing or non-pausing ImGui windows opened from within the control panel or independently
-- **HUD overlays** — always-on foreground draw-list elements rendered every frame
-- **Input callbacks** — intercept and optionally block raw game input events
-- **Themes** — JSON theme files placed in `Data\F4SE\Plugins\F4SEMenuFrameworkThemes\`
-- **Translations** — UTF-8 string overrides via `Data\F4SE\Plugins\F4SEMenuFrameworkStrings.json`
-- **Textures** — load SVG, DDS, PNG, and other image formats as ImGui textures
-- **Font Awesome** — solid, regular, and brands icon fonts included
-
----
-
-## Key Differences from SKSE Menu Framework 3
-
-| Area | SKSE version | F4SE version |
-|---|---|---|
-| Script extender | SKSE64 | F4SE |
-| CommonLib | CommonLibSSE-NG | CommonLibF4 |
-| Plugin entry | `SKSEPluginLoad` | `F4SEPlugin_Query` / `F4SEPlugin_Load` |
-| Namespace | `SKSEMenuFramework::` | `F4SEMenuFramework::` |
-| Header | `SKSEMenuFramework.h` | `F4SEMenuFramework.h` |
-| INI file | `SKSEMenuFramework.ini` | `F4SEMenuFramework.ini` |
-| Plugin folder | `Data\SKSE\Plugins\` | `Data\F4SE\Plugins\` |
-| D3D hook method | IAT (`D3D11CreateDeviceAndSwapChain`) | `write_call<5>` on call site (`REL::ID 224250 + 0x419`) |
-
----
 
 ## Quick Start (plugin developer)
 
