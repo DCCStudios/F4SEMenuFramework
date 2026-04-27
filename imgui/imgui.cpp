@@ -3424,6 +3424,7 @@ const char* ImGui::GetStyleColorName(ImGuiCol idx)
 
 const char* ImGui::FindRenderedTextEnd(const char* text, const char* text_end)
 {
+    if (!text) return text; // null guard: plugins may pass null strings
     const char* text_display_end = text;
     if (!text_end)
         text_end = (const char*)-1;

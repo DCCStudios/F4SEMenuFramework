@@ -974,11 +974,11 @@ CIMGUI_API void igSetNextItemOpen(bool is_open,ImGuiCond cond)
 }
 CIMGUI_API bool igSelectable_Bool(const char* label,bool selected,ImGuiSelectableFlags flags,const ImVec2 size)
 {
-    return ImGui::Selectable(label,selected,flags,size);
+    return ImGui::Selectable(safe_str(label),selected,flags,size);
 }
 CIMGUI_API bool igSelectable_BoolPtr(const char* label,bool* p_selected,ImGuiSelectableFlags flags,const ImVec2 size)
 {
-    return ImGui::Selectable(label,p_selected,flags,size);
+    return ImGui::Selectable(safe_str(label),p_selected,flags,size);
 }
 CIMGUI_API bool igBeginListBox(const char* label,const ImVec2 size)
 {
