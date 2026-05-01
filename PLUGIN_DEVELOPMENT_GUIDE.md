@@ -609,6 +609,83 @@ Handle->IsOpen;          // std::atomic<bool> — set to true/false to open/clos
 Handle->BlockUserInput;  // std::atomic<bool> — set at creation via AddWindow's 2nd arg
 ```
 
+### Non-Pausing Windows (Gameplay Overlays)
+
+Pass `false` as the second argument to `AddWindow()` to create a window that **does not pause game input**. The window stays visible during normal gameplay — even after the Mod Control Panel is closed. This is ideal for debug overlays, live stat displays, or any information panel the player should see while playing.
+
+```cpp
+// UI.h
+namespace UI {
+    void Register();
+    namespace DebugOverlay {
+        inline MENU_WINDOW Handle;
+        void __stdcall RenderSection();
+        void __stdcall RenderWindow();
+    }
+}
+```
+
+```cpp
+// UI.cpp
+void UI::Register() {
+    if (!F4SEMenuFramework::IsInstalled()) return;
+    F4SEMenuFramework::SetSection(MOD_NAME);
+    F4SEMenuFramework::AddSectionItem("Debug Info", DebugOverlay::RenderSection);
+
+    // false = non-pausing (stays visible during gameplay)
+    DebugOverlay::Handle = F4SEMenuFramework::AddWindow(DebugOverlay::RenderWindow, false);
+}
+
+// Section item: just a checkbox to toggle the popout
+void __stdcall UI::DebugOverlay::RenderSection() {
+    bool isOpen = Handle && Handle->IsOpen.load();
+    if (ImGuiMCP::Checkbox("Popout Window", &isOpen)) {
+        if (Handle)
+            Handle->IsOpen.store(isOpen);
+    }
+    if (ImGuiMCP::IsItemHovered())
+        ImGuiMCP::SetTooltip("Open a floating window that persists during gameplay");
+
+    // Render your section content normally...
+    ImGuiMCP::Text("Debug content here (also shown in popout)");
+}
+
+// Framework-managed window: positioned at top-right, user can drag/resize
+void __stdcall UI::DebugOverlay::RenderWindow() {
+    auto viewport = ImGuiMCP::GetMainViewport();
+
+    // Size: 30% x 50% of screen, anchored top-right on first appearance
+    ImGuiMCP::ImVec2 windowSize = ImGuiMCP::ImVec2{
+        viewport->Size.x * 0.3f, viewport->Size.y * 0.5f };
+    ImGuiMCP::ImVec2 windowPos = ImGuiMCP::ImVec2{
+        viewport->Pos.x + viewport->Size.x - windowSize.x - 20,
+        viewport->Pos.y + 20 };
+
+    ImGuiMCP::SetNextWindowPos(windowPos, ImGuiMCP::ImGuiCond_Appearing, { 0, 0 });
+    ImGuiMCP::SetNextWindowSize(windowSize, ImGuiMCP::ImGuiCond_Appearing);
+
+    ImGuiMCP::Begin("Debug Info##MyModName", nullptr,
+        ImGuiMCP::ImGuiWindowFlags_NoCollapse);
+
+    ImGuiMCP::Text("Live game data here...");
+
+    ImGuiMCP::End();
+}
+```
+
+**Key differences from pausing windows:**
+
+| Pausing (`true`) | Non-pausing (`false`) |
+|---|---|
+| Game input is blocked while open | Player can move, shoot, and play normally |
+| Closes when Mod Control Panel closes | **Stays visible** after menu closes |
+| Centered on screen (modal-style) | Anchored to a corner (overlay-style) |
+| Good for settings/editors | Good for debug info, live stats, HUDs |
+
+**Important:** Non-pausing windows are rendered by the framework every frame, independently of the Mod Control Panel. You do NOT need a HUD overlay or manual `Begin/End` calls in your section renderer — the framework calls your window's render function automatically when `Handle->IsOpen` is true.
+
+**Do NOT render windows inside section callbacks.** A common mistake is to call `ImGuiMCP::Begin/End` directly inside an `AddSectionItem` render callback to create a "popout." This does not work correctly because section callbacks only execute while the Mod Control Panel is open, and the window will fight with the framework's own window management. Always use `AddWindow()` for any standalone floating panel.
+
 ---
 
 ## 8. HUD Overlays
