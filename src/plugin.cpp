@@ -4,6 +4,8 @@
 #include "UI.h"
 #include "F4SEMenuFramework.h"
 #include "Translations.h"
+#include "WelcomeBanner.h"
+#include "HotkeyManager.h"
 
 namespace Plugin
 {
@@ -19,6 +21,7 @@ void MessageCallback(F4SE::MessagingInterface::Message* msg)
     case F4SE::MessagingInterface::kGameDataReady:
     {
         Hooks::InstallInputHooks();
+        WelcomeBanner::Show();
         break;
     }
     default:
@@ -61,6 +64,7 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f
     }
 
     Config::Init();
+    HotkeyManager::Load();
     WindowManager::MainInterface = AddWindow(UI::RenderMenuWindow);
     WindowManager::ConfigInterface = AddWindow(UI::RenderConfigWindow);
     WindowManager::MainInterface->BlockUserInput = true;

@@ -1,6 +1,9 @@
 #include "FontManager.h"
 #include "Config.h"
 #include "imgui_internal.h"
+#include "imgui_impl_dx11.h"
+
+#include <filesystem>
 
 #define ICON_MIN_FA 0xe005
 #define ICON_MAX_FA 0xf8ff
@@ -115,4 +118,62 @@ ImFont* FontManager::GetFont(ImGuiIO& io, std::string name, float size, const Im
         return io.Fonts->AddFontFromFileTTF(path.c_str(), size, font_cfg, glyph_ranges);
     }
     return nullptr;
+}
+
+std::vector<std::string> FontManager::GetAvailableFonts() {
+    std::vector<std::string> fonts;
+    const std::string dir = "Data/F4SE/Plugins/Fonts/";
+    if (!std::filesystem::exists(dir)) {
+        return fonts;
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        if (!entry.is_regular_file()) continue;
+        auto ext = entry.path().extension().string();
+        // Case-insensitive .ttf / .otf check
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext == ".ttf" || ext == ".otf") {
+            fonts.push_back(entry.path().filename().string());
+        }
+    }
+    std::sort(fonts.begin(), fonts.end());
+    return fonts;
+}
+
+void FontManager::RequestReload() {
+    reloadPending = true;
+    logger::info("[FontManager] Font reload requested — will rebuild atlas next frame.");
+}
+
+bool FontManager::IsReloadPending() {
+    return reloadPending;
+}
+
+void FontManager::PerformReload() {
+    if (!reloadPending) return;
+    reloadPending = false;
+
+    logger::info("[FontManager] Performing font atlas rebuild with PrimaryFont='{}'", Config::PrimaryFont);
+
+    auto& io = ImGui::GetIO();
+
+    // Clear all existing font data (atlas + glyph ranges cache).
+    io.Fonts->Clear();
+    persistentGlyphRanges.clear();
+    fontSizes.clear();
+
+    // Rebuild all three size buckets with the new primary font.
+    auto regular = LoadFonts(io, Config::FontSizeMedium);
+    io.FontDefault = regular.defaultFont;
+
+    fontSizes["Big"]     = LoadFonts(io, Config::FontSizeBig);
+    fontSizes["Small"]   = LoadFonts(io, Config::FontSizeSmall);
+    fontSizes["Default"] = regular;
+
+    io.Fonts->Build();
+
+    // Force the DX11 backend to recreate the font texture from the new atlas.
+    ImGui_ImplDX11_InvalidateDeviceObjects();
+
+    logger::info("[FontManager] Font atlas rebuild complete.");
 }

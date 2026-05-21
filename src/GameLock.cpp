@@ -7,6 +7,7 @@
 
 GameLock::State GameLock::lastState = GameLock::State::None;
 bool GameLock::gamePausedByUs = false;
+bool GameLock::blurAppliedByUs = false;
 
 void GameLock::SetGamePaused(bool shouldPause) {
     if (shouldPause && !gamePausedByUs) {
@@ -31,6 +32,32 @@ void GameLock::SetGamePaused(bool shouldPause) {
     }
 }
 
+void GameLock::SetBackgroundBlur(bool shouldBlur) {
+    // Only use our ImGui dark overlay — freezeFrameMenuBG freezes the rendered
+    // frame which makes the game look paused even when time is still running.
+    if (shouldBlur && !blurAppliedByUs) {
+        blurAppliedByUs = true;
+        logger::debug("[GameLock] Background dim overlay enabled");
+    } else if (!shouldBlur && blurAppliedByUs) {
+        blurAppliedByUs = false;
+        logger::debug("[GameLock] Background dim overlay disabled");
+    }
+}
+
+void GameLock::RenderBackgroundOverlay() {
+    if (!blurAppliedByUs) return;
+
+    // Draw a dark semi-transparent overlay on top of the engine's blurred frame
+    // to neutralize the blue tint and produce a clean darkened-blur look.
+    auto* viewport = ImGui::GetMainViewport();
+    auto* drawList = ImGui::GetBackgroundDrawList();
+    drawList->AddRectFilled(
+        viewport->Pos,
+        ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y),
+        IM_COL32(0, 0, 0, 140)
+    );
+}
+
 void GameLock::SetState(State currentState) {
     if (lastState == currentState) {
         return;
@@ -51,10 +78,13 @@ void GameLock::SetState(State currentState) {
 
         // Freeze the game world if the user has the setting enabled.
         SetGamePaused(Config::FreezeTimeOnMenu);
+        // Apply background blur if the user has the setting enabled.
+        SetBackgroundBlur(Config::BlurBackgroundOnMenu);
 
     } else if (currentState == State::Unlocked) {
-        // Leaving Locked → Unlocked: always release our engine pause.
+        // Leaving Locked → Unlocked: always release our engine pause and blur.
         SetGamePaused(false);
+        SetBackgroundBlur(false);
 
         if (controlMap) {
             controlMap->ignoreKeyboardMouse = false;
@@ -67,8 +97,9 @@ void GameLock::SetState(State currentState) {
 
     } else if (currentState == State::Resume) {
         // "Resume Game" path: menu stays open but input is unblocked.
-        // Release our engine pause so the world keeps running.
+        // Release our engine pause and blur so the world keeps running.
         SetGamePaused(false);
+        SetBackgroundBlur(false);
 
         if (controlMap) {
             controlMap->ignoreKeyboardMouse = false;

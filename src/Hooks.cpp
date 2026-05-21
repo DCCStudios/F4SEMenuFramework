@@ -11,6 +11,8 @@
 #include "Event.h"
 #include "Config.h"
 #include "Input.h"
+#include "HotkeyManager.h"
+#include "BlurEffect.h"
 
 #include <d3d11.h>
 #include <dxgi.h>
@@ -155,6 +157,9 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
         UI::Renderer::initialized.store(true);
         logger::info("ImGui initialized.");
 
+        // Initialize the GPU blur effect for background dimming
+        BlurEffect::Init(device, swapChain);
+
         WndProcHook::func = reinterpret_cast<WNDPROC>(
             SetWindowLongPtrA(desc.OutputWindow, GWLP_WNDPROC,
                 reinterpret_cast<LONG_PTR>(WndProcHook::thunk)));
@@ -180,6 +185,27 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
     }
 
     if (UI::Renderer::initialized.load()) {
+        // Handle deferred font atlas rebuilds on the render thread.
+        if (FontManager::IsReloadPending()) {
+            FontManager::PerformReload();
+        }
+
+        // Apply GPU blur to the back buffer when background blur is active.
+        // This runs before ImGui so the blurred scene is behind all UI.
+        if (GameLock::blurAppliedByUs && BlurEffect::IsInitialized()) {
+            ID3D11Device* dev = nullptr;
+            swapChain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev));
+            if (dev) {
+                ID3D11DeviceContext* ctx = nullptr;
+                dev->GetImmediateContext(&ctx);
+                if (ctx) {
+                    BlurEffect::RenderBlurredBackground(ctx, swapChain);
+                    ctx->Release();
+                }
+                dev->Release();
+            }
+        }
+
         Event::DispatchEvent(Event::EventType::kBeforeRender);
 
         ImGui_ImplDX11_NewFrame();
@@ -205,6 +231,8 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
                 GameLock::SetState(GameLock::State::Locked);
                 io.MouseDrawCursor = true;
             }
+            // Draw dark overlay behind menu windows when blur setting is active.
+            GameLock::RenderBackgroundOverlay();
             UI::Renderer::RenderWindows();
         } else {
             auto& io = ImGui::GetIO();
@@ -285,6 +313,11 @@ LRESULT Hooks::WndProcHook::thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 WindowManager::Close();
                 logger::debug("[WndProc] ESC — closing blocking windows");
             }
+        }
+
+        // Dispatch registered plugin hotkeys when no blocking menu is active.
+        if (isFirstPress && !WindowManager::ShouldTheGameBePaused()) {
+            HotkeyManager::Dispatch(scanCode);
         }
     }
 

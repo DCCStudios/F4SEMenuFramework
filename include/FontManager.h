@@ -28,8 +28,18 @@ public:
     static FontContainer LoadFonts(ImGuiIO& io, float size);
     static void CleanFontStack();
     static void CleanFont();
+
+    // Runtime font switching: enumerates .ttf files and triggers atlas rebuild.
+    static std::vector<std::string> GetAvailableFonts();
+    static void RequestReload();
+    static bool IsReloadPending();
+    static void PerformReload();
+
     static inline std::map<std::string, FontContainer> fontSizes;
     static inline Font currentFont = Font::fontSizeDefault;
     static inline std::map<float, ImVector<ImWchar>> persistentGlyphRanges;
+
+private:
+    static inline bool reloadPending = false;
 };
 

@@ -6,6 +6,8 @@
 #include "F4SEMenuFramework.h"
 #include "Translations.h"
 #include "GameLock.h"
+#include "FontManager.h"
+#include "Config.h"
 static ImGuiTextFilter filter;
 
 UI::MenuTree* UI::RootMenu = new UI::MenuTree();
@@ -285,6 +287,40 @@ void UI::RenderConfigWindow() {
             Config::LoadStyle();
             Config::Save();
         }
+
+        // --- Font selection dropdown ---
+        {
+            static std::vector<std::string> availableFonts = FontManager::GetAvailableFonts();
+            static int selectedFontIdx = -1;
+
+            // Resolve current selection from Config::PrimaryFont on first use.
+            if (selectedFontIdx < 0) {
+                for (int i = 0; i < static_cast<int>(availableFonts.size()); ++i) {
+                    if (availableFonts[i] == Config::PrimaryFont) {
+                        selectedFontIdx = i;
+                        break;
+                    }
+                }
+                if (selectedFontIdx < 0) selectedFontIdx = 0;
+            }
+
+            if (!availableFonts.empty()) {
+                std::vector<const char*> fontLabels;
+                fontLabels.reserve(availableFonts.size());
+                for (const auto& f : availableFonts) {
+                    fontLabels.push_back(f.c_str());
+                }
+
+                ImGui::Text("Font");
+                if (ImGui::Combo("##FontCombo", &selectedFontIdx, fontLabels.data(),
+                                 static_cast<int>(fontLabels.size()))) {
+                    Config::PrimaryFont = availableFonts[selectedFontIdx];
+                    Config::Save();
+                    FontManager::RequestReload();
+                }
+            }
+        }
+
         if (ToggleButton(Translations::Get("Settings.FreezeTime"), &Config::FreezeTimeOnMenu)) {
             Config::Save();
 
@@ -297,6 +333,11 @@ void UI::RenderConfigWindow() {
 
         if (ToggleButton(Translations::Get("Settings.BlurBackground"), &Config::BlurBackgroundOnMenu)) {
             Config::Save();
+
+            // If we're currently in Locked state, apply the change immediately.
+            if (GameLock::lastState == GameLock::State::Locked) {
+                GameLock::SetBackgroundBlur(Config::BlurBackgroundOnMenu);
+            }
         }
 
         const char* togleModeNames[] = {"SINGLEPRESS", "HOLD", "DOUBLEPRESS", "OFF"};

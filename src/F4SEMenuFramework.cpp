@@ -107,3 +107,25 @@ int64_t RegisterEventPriority(Event::EventCallback callback, float priority) {
 void UnregisterEvent(int64_t id) { Event::RemoveEventListener(id); }
 
 float GetMenuFrameworkVersion() { return MENU_FRAMEWORK_VERSION; }
+
+// --- Plugin Hotkey API ---
+
+int64_t RegisterHotkey(const char* id, unsigned int defaultScanCode, HotkeyCallback callback) {
+    return HotkeyManager::Register(id, defaultScanCode, callback);
+}
+
+void UnregisterHotkey(int64_t handle) {
+    HotkeyManager::Unregister(handle);
+}
+
+unsigned int GetHotkeyBinding(const char* id) {
+    return HotkeyManager::GetBinding(id);
+}
+
+void SetHotkeyBinding(const char* id, unsigned int scanCode) {
+    HotkeyManager::SetBinding(id, scanCode);
+}
+
+bool HasHotkeyConflict(unsigned int scanCode, const char* excludeId) {
+    return !HotkeyManager::GetConflicts(scanCode, excludeId).empty();
+}

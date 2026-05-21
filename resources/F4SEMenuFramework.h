@@ -152,6 +152,72 @@ namespace F4SEMenuFramework {
     }
 
     inline void SetSection(std::string key) { Model::Internal::key = key; }
+
+    // =========================================================================
+    //  Plugin Hotkey API
+    //
+    //  Register named hotkeys that the framework dispatches via its WndProc hook.
+    //  Bindings are persisted to the [Hotkeys] section of F4SEMenuFramework.ini.
+    //  Plugins handle their own rebind UI if desired; the framework provides
+    //  query/set helpers for the current binding.
+    // =========================================================================
+
+    namespace Hotkeys {
+        typedef void(__stdcall* HotkeyCallback)();
+        using RegisterFunction = int64_t(*)(const char*, unsigned int, HotkeyCallback);
+        using UnregisterFunction = void(*)(int64_t);
+        using GetBindingFunction = unsigned int(*)(const char*);
+        using SetBindingFunction = void(*)(const char*, unsigned int);
+
+        // Register a hotkey with a unique string id (e.g. "MyMod.ToggleOverlay"),
+        // a default DIK scan code, and a callback to invoke on key press.
+        // Returns a handle for later unregister. If the user has already rebound
+        // this id in the INI, the persisted binding takes precedence.
+        inline int64_t Register(const char* id, unsigned int defaultScanCode, HotkeyCallback callback) {
+            static auto func = Model::Internal::GetFunction<RegisterFunction>("RegisterHotkey");
+            if (func) {
+                return func(id, defaultScanCode, callback);
+            }
+            return -1;
+        }
+
+        inline void Unregister(int64_t handle) {
+            static auto func = Model::Internal::GetFunction<UnregisterFunction>("UnregisterHotkey");
+            if (func) {
+                func(handle);
+            }
+        }
+
+        // Get the current scan code binding for a hotkey id.
+        inline unsigned int GetBinding(const char* id) {
+            static auto func = Model::Internal::GetFunction<GetBindingFunction>("GetHotkeyBinding");
+            if (func) {
+                return func(id);
+            }
+            return 0;
+        }
+
+        // Change the binding for a hotkey id. Automatically persists to INI.
+        // If the new scan code conflicts with another registered hotkey,
+        // a warning notification is shown on-screen.
+        inline void SetBinding(const char* id, unsigned int scanCode) {
+            static auto func = Model::Internal::GetFunction<SetBindingFunction>("SetHotkeyBinding");
+            if (func) {
+                func(id, scanCode);
+            }
+        }
+
+        // Check if a scan code is already bound by another hotkey (excluding excludeId).
+        // Call this before SetBinding to proactively warn users in your own rebind UI.
+        using HasConflictFunction = bool(*)(unsigned int, const char*);
+        inline bool HasConflict(unsigned int scanCode, const char* excludeId) {
+            static auto func = Model::Internal::GetFunction<HasConflictFunction>("HasHotkeyConflict");
+            if (func) {
+                return func(scanCode, excludeId);
+            }
+            return false;
+        }
+    }
 }
 namespace FontAwesome {
     inline void PushSolid() {

@@ -142,3 +142,122 @@ inline MENU_WINDOW ExampleWindow;
 Here is what your window will look like:
 
 ![image](https://github.com/Thiago099/SKSE-Menu-Framework-SDK/assets/66787043/c301cc1b-d435-47ad-9bdc-a635fa385986)
+
+## Plugin Hotkey API
+
+The framework provides a lightweight hotkey system that dispatches keyboard events via its WndProc hook and persists bindings to the `[Hotkeys]` section of `F4SEMenuFramework.ini`. Your plugin does not need its own WndProc hook or input handling — just register a callback.
+
+### Registering a hotkey
+
+```cpp
+#include "F4SEMenuFramework.h"
+
+void __stdcall MyToggleCallback() {
+    // Called when the user presses the bound key (only while no blocking menu is open).
+    MyOverlay::Toggle();
+}
+
+void RegisterMyHotkeys() {
+    if (!F4SEMenuFramework::IsInstalled()) return;
+
+    // "MyMod.ToggleOverlay" is a unique string id for this hotkey.
+    // 0x3C is the default DIK scan code (F2).
+    // If the user has already rebound it in F4SEMenuFramework.ini, that binding takes precedence.
+    F4SEMenuFramework::Hotkeys::Register("MyMod.ToggleOverlay", 0x3C, MyToggleCallback);
+}
+```
+
+Call `RegisterMyHotkeys()` during your plugin's `F4SEPlugin_Load` or on `kPostPostLoad` messaging.
+
+### Registering multiple hotkeys
+
+A mod can register as many hotkeys as it needs. Call `Register` once per action, each with a **unique string id** (use a mod prefix like `"MyMod.ActionName"` so ids stay distinct across plugins). Each registration gets its own handle, callback, and INI entry.
+
+```cpp
+void __stdcall OnToggleOverlay() { /* ... */ }
+void __stdcall OnOpenDebug()     { /* ... */ }
+void __stdcall OnQuickSave()     { /* ... */ }
+
+void RegisterMyHotkeys() {
+    if (!F4SEMenuFramework::IsInstalled()) return;
+
+    F4SEMenuFramework::Hotkeys::Register("MyMod.ToggleOverlay", 0x3C, OnToggleOverlay); // F2
+    F4SEMenuFramework::Hotkeys::Register("MyMod.OpenDebug",     0x58, OnOpenDebug);     // F12
+    F4SEMenuFramework::Hotkeys::Register("MyMod.QuickSave",     0x43, OnQuickSave);     // F9
+}
+```
+
+Re-registering the **same id** does not create a second hotkey — it updates the callback on the existing entry and returns the same handle.
+
+### Querying the current binding
+
+If your mod has its own settings UI and wants to display the current key:
+
+```cpp
+unsigned int currentScanCode = F4SEMenuFramework::Hotkeys::GetBinding("MyMod.ToggleOverlay");
+// Convert to a display name using your own key name table or the framework's GetToggleKeyName pattern.
+```
+
+### Rebinding from your own UI
+
+```cpp
+// User selected a new key (e.g. from an ImGui combo or "press a key" prompt):
+unsigned int newScanCode = 0x43; // F9
+F4SEMenuFramework::Hotkeys::SetBinding("MyMod.ToggleOverlay", newScanCode);
+// This automatically persists to F4SEMenuFramework.ini.
+// If another mod already uses F9, a warning notification is shown on-screen.
+```
+
+### Checking for conflicts before rebinding
+
+You can proactively check if a scan code is already in use before committing the rebind:
+
+```cpp
+unsigned int candidateKey = 0x43; // F9
+if (F4SEMenuFramework::Hotkeys::HasConflict(candidateKey, "MyMod.ToggleOverlay")) {
+    // Show a confirmation dialog in your UI, e.g.:
+    // "F9 is already used by another mod. Bind anyway?"
+} else {
+    F4SEMenuFramework::Hotkeys::SetBinding("MyMod.ToggleOverlay", candidateKey);
+}
+```
+
+Even without this check, `SetBinding` will still display a brief warning popup (top-right corner) whenever a conflict is detected, so users are always informed.
+
+### Unregistering
+
+If you need to remove a hotkey (e.g. your overlay is destroyed):
+
+```cpp
+int64_t handle = F4SEMenuFramework::Hotkeys::Register("MyMod.ToggleOverlay", 0x3C, MyToggleCallback);
+// ... later ...
+F4SEMenuFramework::Hotkeys::Unregister(handle);
+```
+
+### Common DIK scan codes
+
+| Key | Scan Code |
+|-----|-----------|
+| F1  | 0x3B      |
+| F2  | 0x3C      |
+| F3  | 0x3D      |
+| F4  | 0x3E      |
+| F5  | 0x3F      |
+| F6  | 0x40      |
+| F7  | 0x41      |
+| F8  | 0x42      |
+| F9  | 0x43      |
+| F10 | 0x44      |
+| F11 | 0x57      |
+| F12 | 0x58      |
+| HOME | 0xC7     |
+| INSERT | 0xD2   |
+| DELETE | 0xD3   |
+
+### Behavior notes
+
+- Each hotkey needs a **unique id**; use a mod prefix (e.g. `MyMod.ToggleOverlay`, `MyMod.OpenDebug`).
+- Hotkeys only fire on **first key-down** (not held repeats).
+- Hotkeys are **suppressed** while any blocking framework window is open (the game is "paused").
+- Multiple hotkeys can share the same scan code — all matching callbacks will fire.
+- The `[Hotkeys]` INI section uses key names (e.g. `F2`, `HOME`, `LEFTCONTROL`) not raw numbers.
