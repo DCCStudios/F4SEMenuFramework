@@ -5,6 +5,7 @@
 #include "Application.h"
 #include "F4SEMenuFramework.h"
 #include "Translations.h"
+#include "GameLock.h"
 static ImGuiTextFilter filter;
 
 UI::MenuTree* UI::RootMenu = new UI::MenuTree();
@@ -286,6 +287,12 @@ void UI::RenderConfigWindow() {
         }
         if (ToggleButton(Translations::Get("Settings.FreezeTime"), &Config::FreezeTimeOnMenu)) {
             Config::Save();
+
+            // If we're currently in Locked state, apply the change immediately
+            // so the user sees the effect without closing and reopening the menu.
+            if (GameLock::lastState == GameLock::State::Locked) {
+                GameLock::SetGamePaused(Config::FreezeTimeOnMenu);
+            }
         }
 
         if (ToggleButton(Translations::Get("Settings.BlurBackground"), &Config::BlurBackgroundOnMenu)) {

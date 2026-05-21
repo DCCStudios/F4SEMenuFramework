@@ -22,7 +22,7 @@ void UI::Register() {
 }
 ```
 
-Call `UI::Register()` from your `F4SEPlugin_Load` or from a `kGameDataReady` messaging callback.
+Call `UI::Register()` from your `F4SEPlugin_Load` or from a `kGameDataReady` messaging callback. Use the current `resources/F4SEMenuFramework.h`: `IsInstalled()` is based on **`GetModuleHandle` of the framework DLL** (actually loaded), not `exists("Data/...")` relative to CWD — mod managers often break the latter.
 
 ---
 

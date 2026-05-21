@@ -291,11 +291,11 @@ Change `"MyF4SEPlugin.log"` to match your plugin name.
 
 Copy `F4SEMenuFramework.h` from the framework's `resources/` folder into your `include/` directory. This is the **only file you need** from the framework — you do NOT link against `F4SEMenuFramework.lib`.
 
-The header works via **runtime dynamic linking**: it calls `GetModuleHandle(L"F4SEMenuFramework")` and then `GetProcAddress(...)` for every ImGui function and framework API. This means:
+The header works via **runtime dynamic linking**: it resolves `F4SEMenuFramework.dll` with `GetModuleHandleW` on each `GetProcAddress` path and then `GetProcAddress(...)` for every ImGui function and framework API. This means:
 
 - Your plugin has **zero compile-time dependency** on the framework DLL.
-- The framework DLL must be loaded by F4SE before your plugin's UI functions are called.
-- You should always check `F4SEMenuFramework::IsInstalled()` before calling any framework functions.
+- The framework DLL must be **mapped into the process** before your draw callbacks run (F4SE loads it as a normal plugin; load order vs. your DLL can vary — the header re-queries the module handle instead of caching it once at static init).
+- You should always check `F4SEMenuFramework::IsInstalled()` before calling any framework functions (`IsInstalled` is true when `GetModuleHandleW` succeeds, not when `exists("Data/...")` relative to CWD).
 
 The header provides two namespaces:
 
@@ -308,6 +308,10 @@ The header provides two namespaces:
 ---
 
 ## 4. Plugin Entry Point
+
+### F4SE Menu Framework — register after all plugins load
+
+`F4SEMenuFramework::IsInstalled()` resolves `F4SEMenuFramework.dll` with `GetModuleHandleW`. Plugins are loaded from `plugins.txt` **in order**; if your DLL is listed **before** `F4SEMenuFramework.dll`, your `F4SEPlugin_Load` runs before the framework’s `Load`, so the framework module is **not** in the process yet and registration in `Load` will no-op. **Defer** `SetSection` / `AddSectionItem` to the F4SE messaging interface **`kPostLoad`** or **`kPostPostLoad`** (dispatched from `PluginManager::LoadComplete()` only after every plugin has finished `F4SEPlugin_Load`). Use a static “registered once” guard to avoid duplicate pages.
 
 F4SE plugins use a two-function entry pattern:
 
@@ -343,16 +347,21 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(
 
     F4SE::Init(a_f4se);
 
-    // Register for messaging if you need game-data-ready events
+    // Messaging: combine handlers in one listener (only one registration per plugin is typical).
     F4SE::GetMessagingInterface()->RegisterListener(
         [](F4SE::MessagingInterface::Message* msg) {
+            if (!msg) {
+                return;
+            }
+            if (msg->type == F4SE::MessagingInterface::kPostLoad) {
+                // F4SEMenuFramework.dll is mapped after all F4SEPlugin_Load calls — register UI here
+                // if your plugin name sorts before F4SEMenuFramework in plugins.txt.
+                UI::Register();
+            }
             if (msg->type == F4SE::MessagingInterface::kGameDataReady) {
                 // Safe to look up game forms here
             }
         });
-
-    // Register your menus (framework functions are safe to call here)
-    UI::Register();
 
     logger::info("{} loaded successfully", Plugin::NAME);
     return true;
@@ -372,7 +381,7 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(
 
 ## 5. Registering Menus
 
-All registration happens in a single setup function called from `F4SEPlugin_Load`:
+Call your registration function from **`UI::Register()`** (or equivalent), invoked on **`kPostLoad`** as in section 4 so `F4SEMenuFramework::IsInstalled()` is reliable regardless of `plugins.txt` order. The snippet below shows the body of that function; wire it from the messaging callback, not only from the bottom of `F4SEPlugin_Load`, unless you know your DLL always loads after `F4SEMenuFramework.dll`.
 
 ```cpp
 // UI.h
@@ -971,6 +980,7 @@ If you're porting a plugin from the SKSE version, here are the key changes:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
+| Your plugin never registers a Mod Menu section (no crash), `IsInstalled()` is false | Older consumer headers used `std::filesystem::exists("Data/F4SE/Plugins/F4SEMenuFramework.dll")`, which is **relative to the process working directory** — MO2/modlist instances often launch with CWD **not** the game root, so the check fails even when the DLL is installed | Use a header where `IsInstalled()` is implemented as **`GetModuleHandleW(L"F4SEMenuFramework.dll")` (or base name) ≠ nullptr** — the framework must be **loaded in-process**, not merely present on disk. Also avoid caching `GetModuleHandle` in a **static** initialized at your DLL load: F4SE can load your plugin **before** `F4SEMenuFramework.dll` is mapped; resolve the module handle **per call** (or at least after `kGameDataReady`). |
 | ImGui overlay never appears, no crash | D3D11 `Present` hook installed on a dummy device VTable instead of the game's real swap chain | Hook `D3D11CreateDeviceAndSwapChain` via `write_call<5>` on call site `REL::ID(224250)+0x419` and patch the real swap chain's VTable inside (see §16) |
 | D3D11 IAT hook installed but thunk never called | Game caches the `D3D11CreateDeviceAndSwapChain` function pointer from the IAT during early init, before F4SE plugins load. Patching the IAT entry afterward has no effect | Use `write_call<5>` on the call site (`REL::ID(224250)+0x419`) instead of IAT replacement (`REL::ID(254484)`) — this patches the CALL instruction itself, which cannot be bypassed |
 | Crash on startup in `keyboardThunk` or `mouseThunk` (RCX=0) | `ImGui::GetIO()` called before `ImGui::CreateContext()` — input device poll hooks run before first `Present` call | Guard: `if (!initialized.load()) return;` in all input thunks |
