@@ -81,6 +81,8 @@ endif()
 
 find_package(spdlog REQUIRED CONFIG)
 find_package(NanoSVG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)
 
 file(
   GLOB_RECURSE
@@ -111,6 +113,10 @@ target_precompile_headers(${PROJECT_NAME} PRIVATE include/PCH.h)
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     BEAUTIFUL_NAME="${BEAUTIFUL_NAME}"
     IMGUI_DEFINE_MATH_OPERATORS
+    # Compile out the Win32 backend's own XInput poll: our global
+    # XInputGetState hook feeds it zeroed state while the menu is open, so
+    # gamepad nav events are injected manually (GamepadInput::InjectImGuiEvents).
+    IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
     _UNICODE
     UNICODE
     NOMINMAX
@@ -150,9 +156,14 @@ target_link_libraries(
         spdlog::spdlog
         NanoSVG::nanosvg
         NanoSVG::nanosvgrast
+        nlohmann_json::nlohmann_json
+        ZLIB::ZLIB
         ${DIRECTXTK_LIBRARY}
         d3d11
         dxgi
+        xinput
+        windowscodecs
+        ole32
 )
 
 if (MSVC)

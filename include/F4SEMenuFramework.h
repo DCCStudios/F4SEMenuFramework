@@ -32,7 +32,11 @@ FUNCTION_PREFIX const char* GetToggleKeyName();
 
 // --- Plugin Hotkey API ---
 FUNCTION_PREFIX int64_t RegisterHotkey(const char* id, unsigned int defaultScanCode, HotkeyCallback callback);
+FUNCTION_PREFIX int64_t RegisterGamepadHotkey(const char* id, unsigned int defaultConfigCode, HotkeyCallback callback);
 FUNCTION_PREFIX void UnregisterHotkey(int64_t handle);
 FUNCTION_PREFIX unsigned int GetHotkeyBinding(const char* id);
 FUNCTION_PREFIX void SetHotkeyBinding(const char* id, unsigned int scanCode);
 FUNCTION_PREFIX bool HasHotkeyConflict(unsigned int scanCode, const char* excludeId);
+
+// --- Gamepad Query API ---
+FUNCTION_PREFIX bool IsControllerConnected();

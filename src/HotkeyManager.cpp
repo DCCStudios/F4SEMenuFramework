@@ -1,6 +1,8 @@
 #include "HotkeyManager.h"
 #include "Application.h"
 #include "HudManager.h"
+#include "GamepadInput.h"
+#include "MCM/MCMKeybindStore.h"
 #include "imgui.h"
 
 // --- Conflict confirmation dialog state ---
@@ -29,6 +31,9 @@ namespace HotkeyConflictDialog {
         if (it != HotkeyManager::idToHandle.end()) {
             HotkeyManager::entriesByHandle[it->second].scanCode = pendingScanCode;
             HotkeyManager::Save();
+            // Keep the MCM Keybinds.json in sync for MCM-managed hotkeys
+            // (no-op for regular framework/plugin hotkeys).
+            MCMKeybindStore::OnFrameworkBindingChanged(pendingId, pendingScanCode);
             logger::info("[HotkeyManager] Binding for '{}' confirmed -> {}",
                          pendingId, keyName);
         }
@@ -141,6 +146,7 @@ int64_t HotkeyManager::Register(const char* id, unsigned int defaultScanCode, Ho
     entry.scanCode = defaultScanCode;
     entry.callback = callback;
     entry.handle = handle;
+    entry.device = HotkeyDevice::Keyboard;
 
     entriesByHandle[handle] = entry;
     idToHandle[strId] = handle;
@@ -184,24 +190,45 @@ void HotkeyManager::SetBinding(const char* id, unsigned int scanCode) {
     auto it = idToHandle.find(std::string(id));
     if (it == idToHandle.end()) return;
 
-    // Check for conflicts before applying the new binding.
-    auto conflicts = GetConflicts(scanCode, id);
-    if (!conflicts.empty()) {
-        // Don't apply yet — show confirmation dialog. Binding is applied
-        // only if the user clicks Confirm.
-        ShowConflictWarning(std::string(id), conflicts, scanCode);
-        return;
+    // Check for conflicts before applying the new binding. Unbinding
+    // (scanCode 0) never conflicts — every unbound hotkey shares code 0.
+    if (scanCode != 0) {
+        auto conflicts = GetConflicts(scanCode, id);
+        if (!conflicts.empty()) {
+            // Don't apply yet — show confirmation dialog. Binding is applied
+            // only if the user clicks Confirm.
+            ShowConflictWarning(std::string(id), conflicts, scanCode);
+            return;
+        }
     }
 
     // No conflict — apply immediately.
     entriesByHandle[it->second].scanCode = scanCode;
     Save();
+    // Mirror MCM-managed hotkeys into MCM's Keybinds.json (no-op otherwise).
+    MCMKeybindStore::OnFrameworkBindingChanged(std::string(id), scanCode);
     logger::info("[HotkeyManager] Binding for '{}' changed to {}",
+                 id, GetKeyName(scanCode, RE::INPUT_DEVICE::kKeyboard));
+}
+
+bool HotkeyManager::IsRegistered(const char* id) {
+    if (!id) return false;
+    return idToHandle.find(std::string(id)) != idToHandle.end();
+}
+
+void HotkeyManager::ImportBinding(const char* id, unsigned int scanCode) {
+    if (!id) return;
+    auto it = idToHandle.find(std::string(id));
+    if (it == idToHandle.end()) return;
+    entriesByHandle[it->second].scanCode = scanCode;
+    logger::info("[HotkeyManager] Imported binding for '{}' -> {}",
                  id, GetKeyName(scanCode, RE::INPUT_DEVICE::kKeyboard));
 }
 
 std::vector<std::string> HotkeyManager::GetConflicts(unsigned int scanCode, const char* excludeId) {
     std::vector<std::string> conflicts;
+    // Scan code 0 means "unbound" — unbound hotkeys never conflict.
+    if (scanCode == 0) return conflicts;
     std::string exclude = excludeId ? std::string(excludeId) : "";
     for (auto& [handle, entry] : entriesByHandle) {
         if (entry.scanCode == scanCode && entry.id != exclude) {
@@ -220,7 +247,76 @@ void HotkeyManager::ShowConflictWarning(const std::string& hotkeyId, const std::
 
 void HotkeyManager::Dispatch(unsigned int scanCode) {
     for (auto& [handle, entry] : entriesByHandle) {
-        if (entry.scanCode == scanCode && entry.callback) {
+        if (entry.device == HotkeyDevice::Keyboard && entry.scanCode == scanCode && entry.callback) {
+            entry.callback();
+        }
+    }
+}
+
+int64_t HotkeyManager::RegisterGamepad(const char* id, unsigned int defaultConfigCode, HotkeyCallback callback) {
+    if (!id || !callback) return -1;
+
+    std::string strId(id);
+
+    // If already registered under this id, update the callback and return existing handle.
+    auto itId = idToHandle.find(strId);
+    if (itId != idToHandle.end()) {
+        auto& entry = entriesByHandle[itId->second];
+        entry.callback = callback;
+        return itId->second;
+    }
+
+    int64_t handle = autoIncrement++;
+
+    HotkeyEntry entry;
+    entry.id = strId;
+    entry.defaultScanCode = defaultConfigCode;
+    entry.scanCode = defaultConfigCode;
+    entry.callback = callback;
+    entry.handle = handle;
+    entry.device = HotkeyDevice::Gamepad;
+
+    entriesByHandle[handle] = entry;
+    idToHandle[strId] = handle;
+
+    // Check INI for persisted gamepad binding
+    const auto ini = new Ini("F4SEMenuFramework.ini");
+    ini->SetSection("Hotkeys");
+    const char* val = ini->GetString(strId.c_str(), "");
+    if (val && val[0] != '\0') {
+        int resolved = GetKeyBinding(std::string(val), RE::INPUT_DEVICE::kGamepad);
+        if (resolved != 0) {
+            entriesByHandle[handle].scanCode = static_cast<unsigned int>(resolved);
+        }
+    }
+    delete ini;
+
+    logger::info("[HotkeyManager] Registered gamepad hotkey '{}' -> config code {} (handle {})",
+                 strId, entriesByHandle[handle].scanCode, handle);
+    return handle;
+}
+
+void HotkeyManager::DispatchGamepad(unsigned short buttonMask) {
+    // Match each registered gamepad hotkey against the XInput bitmask of newly-pressed buttons.
+    for (auto& [handle, entry] : entriesByHandle) {
+        if (entry.device != HotkeyDevice::Gamepad) continue;
+        if (!entry.callback) continue;
+
+        WORD entryMask = GamepadInput::ConfigCodeToXInputMask(entry.scanCode);
+        if (entryMask == 0) continue; // triggers handled separately
+
+        if ((buttonMask & entryMask) != 0) {
+            entry.callback();
+        }
+    }
+}
+
+void HotkeyManager::DispatchGamepadTrigger(unsigned int configCode) {
+    // Dispatch gamepad hotkeys bound to analog triggers (config codes 9=LT, 10=RT).
+    for (auto& [handle, entry] : entriesByHandle) {
+        if (entry.device != HotkeyDevice::Gamepad) continue;
+        if (!entry.callback) continue;
+        if (entry.scanCode == configCode) {
             entry.callback();
         }
     }

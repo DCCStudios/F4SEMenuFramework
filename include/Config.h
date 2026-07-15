@@ -23,4 +23,12 @@ class Config {
     static float FontSizeMedium;
     static float FontSizeBig;
     static void LoadStyle();
+
+    // MCM Backwards Compatibility
+    static bool MCMCompatEnabled;
+    static bool MCMCompatWhenNativePresent;
+
+    // Gamepad UX: which button glyph art the hint bar uses.
+    // 0 = Xbox (default), 1 = PlayStation.
+    static int GamepadGlyphStyle;
 };

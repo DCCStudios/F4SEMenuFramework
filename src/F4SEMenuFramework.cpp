@@ -6,8 +6,9 @@
 #include "Renderer.h"
 #include "UI.h"
 #include "TextureLoader.h"
+#include "GamepadInput.h"
 
-#define MENU_FRAMEWORK_VERSION 3.7f
+#define MENU_FRAMEWORK_VERSION 3.8f
 
 void AddSectionItem(const char* path, RenderFunction rendererFunction) { 
     auto pathSplit = SplitString(path, '/');
@@ -128,4 +129,14 @@ void SetHotkeyBinding(const char* id, unsigned int scanCode) {
 
 bool HasHotkeyConflict(unsigned int scanCode, const char* excludeId) {
     return !HotkeyManager::GetConflicts(scanCode, excludeId).empty();
+}
+
+int64_t RegisterGamepadHotkey(const char* id, unsigned int defaultConfigCode, HotkeyCallback callback) {
+    return HotkeyManager::RegisterGamepad(id, defaultConfigCode, callback);
+}
+
+// --- Gamepad Query API ---
+
+bool IsControllerConnected() {
+    return GamepadInput::IsControllerConnected();
 }

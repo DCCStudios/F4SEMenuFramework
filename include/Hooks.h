@@ -49,8 +49,10 @@ namespace Hooks {
     struct DevicePollHook {
         static void __fastcall keyboardThunk(RE::BSInputDevice* device, float pollDelta);
         static void __fastcall mouseThunk(RE::BSInputDevice* device, float pollDelta);
+        static void __fastcall gamepadThunk(RE::BSInputDevice* device, float pollDelta);
         static inline void (*originalKeyboardPoll)(RE::BSInputDevice*, float) = nullptr;
         static inline void (*originalMousePoll)(RE::BSInputDevice*, float) = nullptr;
+        static inline void (*originalGamepadPoll)(RE::BSInputDevice*, float) = nullptr;
         static void install();
     };
 

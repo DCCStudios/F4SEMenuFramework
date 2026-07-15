@@ -1,6 +1,7 @@
 #include "UI.h"
 #include "WindowManager.h"
 #include <imgui.h>
+#include <imgui_internal.h>  // FocusWindow / NavInitWindow for gamepad pane switching
 #include "Renderer.h"
 #include "Application.h"
 #include "F4SEMenuFramework.h"
@@ -8,7 +9,18 @@
 #include "GameLock.h"
 #include "FontManager.h"
 #include "Config.h"
+#include "GamepadInput.h"
+#include "GamepadGlyphs.h"
+#include "MCM/MCMWidgetRenderer.h"
+#include "MCM/MCMConflictCheck.h"
 static ImGuiTextFilter filter;
+
+// --- Gamepad pane focus state (main menu window) ---
+// 0 = mod-list tree (left pane), 1 = settings content (right pane).
+// LB/L1 focuses the list, RB/R1 focuses the content; B walks back through
+// the cascade implemented in UI::HandleGamepadBack().
+static int s_gamepadPane = 0;
+static bool s_paneFocusRequest = false;  // consume on the frame the target child renders
 
 UI::MenuTree* UI::RootMenu = new UI::MenuTree();
 
@@ -77,6 +89,27 @@ void __stdcall UI::RenderMenuWindow() {
 
     ImGui::Begin("#MCPMainWindow", nullptr, window_flags);
 
+    // --- Gamepad shoulder-button pane switching + Y = open settings ---
+    // Only react while the menu actually has input (game paused for us) and a
+    // controller is connected; key events come from GamepadInput's ImGui bridge.
+    const bool gamepadActive =
+        GamepadInput::IsControllerConnected() && WindowManager::ShouldTheGameBePaused();
+    if (gamepadActive) {
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) {
+            s_gamepadPane = 0;
+            s_paneFocusRequest = true;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) {
+            s_gamepadPane = 1;
+            s_paneFocusRequest = true;
+        }
+        // Y / Triangle opens the framework settings window (matches hint bar)
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false) &&
+            !WindowManager::ConfigInterface->IsOpen.load()) {
+            WindowManager::ConfigInterface->IsOpen = true;
+        }
+    }
+
     if (ImGui::BeginMenuBar()) {
         PushSolid();
         if (ImGui::BeginMenu(Translations::Get("Options"))) {
@@ -139,14 +172,65 @@ void __stdcall UI::RenderMenuWindow() {
     }
     ImGui::EndChild();
 
+    // Active-pane highlight: when navigating by gamepad, the focused pane gets
+    // the nav-highlight color as its border so the user can see where LB/RB
+    // focus currently is.
+    const ImVec4 paneHighlight = ImGui::GetStyleColorVec4(ImGuiCol_NavHighlight);
+
     // Tree view section
+    const bool highlightTree = gamepadActive && s_gamepadPane == 0;
+    if (highlightTree) ImGui::PushStyleColor(ImGuiCol_Border, paneHighlight);
     ImGui::BeginChild("F4SEModControlPanelTreeView", ImVec2(ImGui::GetContentRegionAvail().x * 0.3f, -FLT_MIN),
                       ImGuiChildFlags_Border);
+    if (highlightTree) ImGui::PopStyleColor();
+
+    // Apply a pending LB pane-switch: focus this child and init nav on its
+    // first item so D-pad selection starts inside the list.
+    if (s_paneFocusRequest && s_gamepadPane == 0) {
+        s_paneFocusRequest = false;
+        ImGuiWindow* treeWin = ImGui::GetCurrentWindow();
+        ImGui::FocusWindow(treeWin);
+        ImGui::NavInitWindow(treeWin, true);
+    }
     node_id = 0;
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 5.0f));
-    for (const auto& item : RootMenu->Children) {
-        if (filter.PassFilter(item.first.c_str()) &&
-            (ImGui::CollapsingHeader(std::format("{}##{}", item.first, node_id).c_str()))) {
+
+    // Name of the translated-MCM top-level group. Pinned to the top of the tree
+    // (see below) and given a distinct accent + larger header.
+    static constexpr const char* kMCMGroup = "MCM Mod Settings";
+
+    // Renders a single top-level tree group (its CollapsingHeader + children).
+    auto renderTopLevelGroup = [&](const std::pair<const std::string, UI::MenuTree*>& item) {
+        // Translated MCM menus get a distinct accent so users can tell them
+        // apart from native F4SE pages. The accent is derived from the active
+        // theme's text color (blended toward amber) so it stays readable and
+        // consistent-looking regardless of which style JSON is loaded.
+        const bool isMCMGroup = (item.first == kMCMGroup);
+        if (isMCMGroup) {
+            const ImVec4 base = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+            const ImVec4 accent{
+                base.x * 0.35f + 1.00f * 0.65f,
+                base.y * 0.35f + 0.72f * 0.65f,
+                base.z * 0.35f + 0.25f * 0.65f,
+                base.w};
+            ImGui::PushStyleColor(ImGuiCol_Text, accent);
+            // Make this header stand out from the native pages: a taller bar
+            // (extra frame padding) and larger label text (window font scale).
+            // Both are reset right after the header renders so nothing else in
+            // the tree is affected.
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f, 9.0f));
+            ImGui::SetWindowFontScale(1.25f);
+        }
+        const bool headerOpen =
+            filter.PassFilter(item.first.c_str()) &&
+            ImGui::CollapsingHeader(std::format("{}##{}", item.first, node_id).c_str());
+        if (isMCMGroup) {
+            ImGui::SetWindowFontScale(1.0f);
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor();
+        }
+
+        if (headerOpen) {
             for (auto node : item.second->SortedChildren) {
                 RenderNode(node);
             }
@@ -155,6 +239,20 @@ void __stdcall UI::RenderMenuWindow() {
                 DummyRenderer(node);
             }
         }
+    };
+
+    // Pin the translated "MCM Mod Settings" group to the very top of the list,
+    // ahead of the alphabetically-ordered native pages. RootMenu->Children is a
+    // std::map (alphabetical), so render the MCM group explicitly first, then
+    // everything else while skipping it.
+    if (auto mcmIt = RootMenu->Children.find(kMCMGroup); mcmIt != RootMenu->Children.end()) {
+        renderTopLevelGroup(*mcmIt);
+    }
+    for (const auto& item : RootMenu->Children) {
+        if (item.first == kMCMGroup) {
+            continue;
+        }
+        renderTopLevelGroup(item);
     }
     ImGui::PopStyleVar();
     ImGui::EndChild();
@@ -162,13 +260,81 @@ void __stdcall UI::RenderMenuWindow() {
     ImGui::SameLine();
 
     // Content section
+    const bool highlightContent = gamepadActive && s_gamepadPane == 1;
+    if (highlightContent) ImGui::PushStyleColor(ImGuiCol_Border, paneHighlight);
     ImGui::BeginChild("F4SEModControlPanelMenuNode", ImVec2(0, -FLT_MIN), ImGuiChildFlags_Border);
+    if (highlightContent) ImGui::PopStyleColor();
+
+    // Apply a pending RB pane-switch: focus the content child and init nav on
+    // its first widget so D-pad selection starts on the first setting.
+    if (s_paneFocusRequest && s_gamepadPane == 1) {
+        s_paneFocusRequest = false;
+        ImGuiWindow* contentWin = ImGui::GetCurrentWindow();
+        ImGui::FocusWindow(contentWin);
+        ImGui::NavInitWindow(contentWin, true);
+    }
+
     if (display_node) {
         display_node->Render();
     }
     ImGui::EndChild();
 
+    // Capture the main window rect for the hint bar before End()
+    const ImVec2 mainPos = ImGui::GetWindowPos();
+    const ImVec2 mainSize = ImGui::GetWindowSize();
+
     ImGui::End();
+
+    // Control-hint bar below the main window whenever a controller is connected
+    if (GamepadInput::IsControllerConnected()) {
+        GamepadGlyphs::RenderHintBar(mainPos, mainSize);
+    }
+}
+
+// Snapshot of "was a popup open / was a widget being edited" taken right
+// before ImGui::NewFrame(). ImGui's nav-cancel handling runs INSIDE NewFrame
+// and closes the popup / clears the active widget in response to B before
+// HandleGamepadBack executes — checking live state there would always see
+// "nothing open" and incorrectly fall through the cascade.
+static bool s_hadPopupOrEditBeforeNewFrame = false;
+
+void UI::PreNewFrameGamepadSnapshot() {
+    ImGuiContext* ctx = ImGui::GetCurrentContext();
+    s_hadPopupOrEditBeforeNewFrame =
+        ctx && (ctx->OpenPopupStack.Size > 0 || ctx->ActiveId != 0);
+}
+
+bool UI::HandleGamepadBack() {
+    // Cascade for the gamepad "back" button (B / Circle), most-specific first.
+
+    // 1. A hotkey-rebind capture is in progress — cancel it, keep the menu.
+    if (MCMWidgetRenderer::IsHotkeyCaptureActive()) {
+        MCMWidgetRenderer::CancelHotkeyCapture();
+        return true;
+    }
+
+    // 2./3. A popup was open or a widget was being edited when B was pressed —
+    // ImGui's NavCancel already closed/cleared it inside NewFrame; the press
+    // is consumed, don't also back out of the menu.
+    if (s_hadPopupOrEditBeforeNewFrame) {
+        return true;
+    }
+
+    // 4. The settings window is open — close just that window.
+    if (WindowManager::ConfigInterface && WindowManager::ConfigInterface->IsOpen.load()) {
+        WindowManager::ConfigInterface->IsOpen = false;
+        return true;
+    }
+
+    // 5. Content pane is focused — step back to the mod list first.
+    if (s_gamepadPane == 1) {
+        s_gamepadPane = 0;
+        s_paneFocusRequest = true;
+        return true;
+    }
+
+    // 6. Nothing left to back out of — the caller closes the menu.
+    return false;
 }
 
 void UI::AddToTree(UI::MenuTree* node, std::vector<std::string>& path, RenderFunction render, std::string title) {
@@ -220,11 +386,27 @@ bool ToggleButton(const char* label, bool* v) {
     ImVec2 p_max = ImVec2(p.x + width, p.y + height);
 
     float t = *v ? 1.0f : 0.0f;
-    ImU32 col_bg = ImGui::GetColorU32(*v ? ImGuiCol_ButtonActive : ImGuiCol_ButtonActive);
+
+    // Distinct colors: green when ON, dark gray when OFF
+    ImU32 col_bg = *v ? IM_COL32(56, 142, 60, 255) : IM_COL32(80, 80, 80, 255);
 
     draw_list->AddRectFilled(p_min, p_max, col_bg, height * 0.5f);
     draw_list->AddCircleFilled(ImVec2(p.x + radius + t * (width - radius * 2.0f), p.y + radius), radius - 1.5f,
                                IM_COL32(255, 255, 255, 255));
+
+    // Draw ON/OFF text inside the toggle track for clarity
+    const char* stateText = *v ? "ON" : "OFF";
+    ImVec2 textSize = ImGui::CalcTextSize(stateText);
+    float textX;
+    if (*v) {
+        // "ON" text on the left side (where the knob came from)
+        textX = p.x + radius * 0.4f;
+    } else {
+        // "OFF" text on the right side (where the knob would go)
+        textX = p.x + width - textSize.x - radius * 0.4f;
+    }
+    float textY = p.y + (height - textSize.y) * 0.5f;
+    draw_list->AddText(ImVec2(textX, textY), IM_COL32(255, 255, 255, 200), stateText);
 
     ImGui::SameLine();
     ImGui::Text("%s", label);
@@ -235,7 +417,8 @@ bool ToggleButton(const char* label, bool* v) {
 void UI::RenderConfigWindow() {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2{0.5f, 0.5f});
-    ImGui::SetNextWindowSize(ImVec2{viewport->Size.x * 0.4f, viewport->Size.y * 0.4f}, ImGuiCond_Appearing);
+    // 0.46 = the original 0.4 default enlarged by 15%
+    ImGui::SetNextWindowSize(ImVec2{viewport->Size.x * 0.46f, viewport->Size.y * 0.46f}, ImGuiCond_Appearing);
     ImGuiWindowFlags window_flags = 0;
     window_flags |= ImGuiWindowFlags_NoCollapse;
     window_flags |= ImGuiWindowFlags_MenuBar;
@@ -426,6 +609,94 @@ void UI::RenderConfigWindow() {
         }
 
         ImGui::PopItemWidth();  // ADDED: Pop the item width
+
+        // --- MCM Compatibility Section ---
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::Text("MCM Compatibility");
+        ImGui::Spacing();
+
+        // Deferred one frame so OpenPopup runs in the same ID scope every time.
+        static bool s_mcmRestartPopupPending = false;
+
+        if (ToggleButton("Enable MCM Compatibility Layer", &Config::MCMCompatEnabled)) {
+            Config::Save();
+            // Warn that the layer only (re)initializes during game startup.
+            if (Config::MCMCompatEnabled) {
+                s_mcmRestartPopupPending = true;
+            }
+        }
+        bool mcmToggleHovered = ImGui::IsItemHovered();
+        // Bold amber "[BETA]" tag after the toggle label. ImGui has no bold
+        // font variant loaded, so fake the weight by overdrawing the text
+        // with a sub-pixel horizontal offset.
+        ImGui::SameLine();
+        {
+            const ImVec4 betaColor{1.0f, 0.72f, 0.25f, 1.0f};
+            const ImVec2 betaPos = ImGui::GetCursorScreenPos();
+            ImGui::TextColored(betaColor, "[BETA]");
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(betaPos.x + 0.7f, betaPos.y), ImGui::GetColorU32(betaColor), "[BETA]");
+        }
+        mcmToggleHovered |= ImGui::IsItemHovered();
+        if (mcmToggleHovered) {
+            ImGui::SetTooltip("Translates installed MCM mod configs into F4SE Menu pages.\nRequires game restart to take effect when toggled.");
+        }
+
+        if (s_mcmRestartPopupPending) {
+            ImGui::OpenPopup("Restart Required##MCMCompat");
+            s_mcmRestartPopupPending = false;
+        }
+        // Center the modal over the viewport
+        ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2{0.5f, 0.5f});
+        if (ImGui::BeginPopupModal("Restart Required##MCMCompat", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+            ImGui::TextWrapped("The MCM compatibility layer scans and translates MCM mod configs during game startup.");
+            ImGui::Spacing();
+            ImGui::TextWrapped("Restart the game for the MCM Mod Settings pages to appear.");
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            float btnWidth = 120.0f;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
+            if (ImGui::Button("OK", ImVec2(btnWidth, 0))) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        // Only meaningful when the real MCM plugin is loaded alongside us —
+        // by default our translation layer silently steps aside in that case.
+        if (MCMConflictCheck::IsNativeMCMPresent()) {
+            if (ToggleButton("Load MCM Mod Settings Even With MCM Installed", &Config::MCMCompatWhenNativePresent)) {
+                Config::Save();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("The original MCM plugin is installed. By default this framework\n"
+                                  "hides its own MCM Mod Settings pages to avoid conflicts. Enable to\n"
+                                  "show them anyway (both write the same setting files).\n"
+                                  "Requires game restart to take effect.");
+            }
+        }
+
+        // --- Gamepad Section ---
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::Text("Gamepad");
+        ImGui::Spacing();
+
+        ImGui::PushItemWidth(contentWidth);
+        const char* glyphStyleNames[] = { "Xbox", "PlayStation" };
+        ImGui::Text("Button Glyph Style");
+        if (ImGui::Combo("##GamepadGlyphStyleCombo", &Config::GamepadGlyphStyle,
+                         glyphStyleNames, IM_ARRAYSIZE(glyphStyleNames))) {
+            Config::Save();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Which controller button art the hint bar uses.");
+        }
+        ImGui::PopItemWidth();
+
         ImGui::EndGroup();      // ADDED: End the group
     }
     ImGui::End();  // MOVED: Always call End() after Begin()

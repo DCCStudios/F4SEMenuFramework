@@ -70,6 +70,23 @@ void TextureLoader::DisposeTexture(std::string path) {
     }
 }
 
+ImTextureID TextureLoader::GetTextureFromMemory(const std::string& key, int width, int height, const unsigned char* rgba) {
+    if (!rgba || width <= 0 || height <= 0) {
+        return 0;
+    }
+    auto it = textures.find(key);
+    if (it != textures.end()) {
+        return it->second;
+    }
+    auto* srv = TextureLoaderImpl::CreateTextureFromRGBA(rgba, width, height);
+    if (!srv) {
+        return 0;
+    }
+    auto texId = reinterpret_cast<ImTextureID>(srv);
+    textures[key] = texId;
+    return texId;
+}
+
 ImTextureID TextureLoader::GetTexture(std::string texturePath, ImVec2 size) {
     std::string textureKey = texturePath;
 
@@ -138,6 +155,44 @@ ID3D11ShaderResourceView* TextureLoader::TextureLoaderImpl::LoadTextureFromWICFi
     DirectX::CreateWICTextureFromFile(device, context, wpath, nullptr, &texture);
 
     return texture;
+}
+
+ID3D11ShaderResourceView* TextureLoader::TextureLoaderImpl::CreateTextureFromRGBA(const unsigned char* rgba, int width, int height) {
+    if (!device || !rgba || width <= 0 || height <= 0) {
+        return nullptr;
+    }
+
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = static_cast<UINT>(width);
+    desc.Height = static_cast<UINT>(height);
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA subResource = {};
+    subResource.pSysMem = rgba;
+    subResource.SysMemPitch = static_cast<UINT>(width) * 4;
+
+    ID3D11Texture2D* pTexture = nullptr;
+    if (FAILED(device->CreateTexture2D(&desc, &subResource, &pTexture)) || !pTexture) {
+        return nullptr;
+    }
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = desc.Format;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+
+    ID3D11ShaderResourceView* srv = nullptr;
+    HRESULT hr = device->CreateShaderResourceView(pTexture, &srvDesc, &srv);
+    pTexture->Release();
+    if (FAILED(hr)) {
+        return nullptr;
+    }
+    return srv;
 }
 
 ID3D11ShaderResourceView* TextureLoader::TextureLoaderImpl::LoadTextureFromSVGFile(std::string path, ImVec2 size) {

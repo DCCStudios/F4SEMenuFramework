@@ -19,6 +19,9 @@ bool Config::EnableThai = false;
 float Config::FontSizeSmall = 16.0f;
 float Config::FontSizeMedium = 32.0f;
 float Config::FontSizeBig = 64.0f;
+bool Config::MCMCompatEnabled = true;
+bool Config::MCMCompatWhenNativePresent = false;
+int Config::GamepadGlyphStyle = 0;
 
 
 void Config::Init() {
@@ -51,7 +54,17 @@ void Config::Init() {
     FontSizeMedium = ini->GetFloat("FontSizeMedium", 32.0f);
     FontSizeBig = ini->GetFloat("FontSizeBig", 64.0f);
 
+    ini->SetSection("MCMCompat");
+    MCMCompatEnabled = ini->GetBool("Enabled", true);
+    MCMCompatWhenNativePresent = ini->GetBool("MCMCompatWhenNativePresent", false);
 
+    // Gamepad glyph platform: "xbox" (default) or "playstation"
+    ini->SetSection("Gamepad");
+    {
+        std::string glyphStyle = ini->GetString("GlyphStyle", "xbox");
+        std::transform(glyphStyle.begin(), glyphStyle.end(), glyphStyle.begin(), ::tolower);
+        GamepadGlyphStyle = (glyphStyle == "playstation" || glyphStyle == "ps") ? 1 : 0;
+    }
 
     delete ini;
     delete[] menuStyleStr;
@@ -113,6 +126,15 @@ void Config::Save() {
     ini->SetFloat("FontSizeSmall", FontSizeSmall);
     ini->SetFloat("FontSizeMedium", FontSizeMedium);
     ini->SetFloat("FontSizeBig", FontSizeBig);
+
+    // MCMCompat Section
+    ini->SetSection("MCMCompat");
+    ini->SetBool("Enabled", MCMCompatEnabled);
+    ini->SetBool("MCMCompatWhenNativePresent", MCMCompatWhenNativePresent);
+
+    // Gamepad Section
+    ini->SetSection("Gamepad");
+    ini->SetString("GlyphStyle", GamepadGlyphStyle == 1 ? "playstation" : "xbox");
 
     // Save to file
     if (!ini->Save()) {

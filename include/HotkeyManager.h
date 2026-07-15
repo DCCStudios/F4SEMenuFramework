@@ -7,28 +7,49 @@
 
 typedef void(__stdcall* HotkeyCallback)();
 
+// Input device type for hotkey bindings
+enum class HotkeyDevice : uint8_t {
+    Keyboard = 0,
+    Gamepad = 1
+};
+
 // Lightweight hotkey registry for plugin authors.
-// Framework dispatches registered hotkeys via its WndProc hook and persists
-// bindings to the [Hotkeys] section of F4SEMenuFramework.ini.
+// Framework dispatches registered hotkeys via its WndProc hook (keyboard)
+// and GamepadInput::Poll() (controller), persisting bindings to the [Hotkeys]
+// section of F4SEMenuFramework.ini.
 // Mods are responsible for their own rebind UI if desired.
 class HotkeyManager {
 public:
     struct HotkeyEntry {
         std::string id;
-        unsigned int scanCode;        // current binding (DIK scan code)
+        unsigned int scanCode;        // current binding (DIK scan code or gamepad config code)
         unsigned int defaultScanCode; // original default for reset
         HotkeyCallback callback;
         int64_t handle;
+        HotkeyDevice device;          // which input device this binding uses
     };
 
-    // Register a hotkey. If the INI already has a persisted binding for this id,
+    // Register a keyboard hotkey. If the INI already has a persisted binding for this id,
     // it takes precedence over defaultScanCode. Returns a handle for unregister.
     static int64_t Register(const char* id, unsigned int defaultScanCode, HotkeyCallback callback);
+
+    // Register a gamepad hotkey. configCode uses the same button codes as Config
+    // (e.g. 4096=A, 8192=B, 256=LB, 9=LT, 10=RT).
+    static int64_t RegisterGamepad(const char* id, unsigned int defaultConfigCode, HotkeyCallback callback);
+
     static void Unregister(int64_t handle);
 
     // Query / change binding at runtime (for mods building their own rebind UI).
     static unsigned int GetBinding(const char* id);
     static void SetBinding(const char* id, unsigned int scanCode);
+
+    // True when a hotkey with this id has been registered.
+    static bool IsRegistered(const char* id);
+
+    // Silently overwrite a binding: no conflict dialog, no external-store
+    // notification. Used when importing bindings from the MCM Keybinds.json
+    // (that file is already the source of truth, so echoing back is pointless).
+    static void ImportBinding(const char* id, unsigned int scanCode);
 
     // Returns all hotkey ids currently bound to the given scan code, excluding
     // the specified id (pass nullptr to get all). Useful for mods to check for
@@ -37,6 +58,13 @@ public:
 
     // Called from WndProc on WM_KEYDOWN first-press when no blocking window is open.
     static void Dispatch(unsigned int scanCode);
+
+    // Called from GamepadInput::Poll() when digital buttons have rising edges.
+    // buttonMask is the XInput bitmask of newly-pressed buttons.
+    static void DispatchGamepad(unsigned short buttonMask);
+
+    // Called for analog trigger rising-edge. configCode is 9 (LT) or 10 (RT).
+    static void DispatchGamepadTrigger(unsigned int configCode);
 
     // Load persisted bindings from INI (called once during init).
     static void Load();

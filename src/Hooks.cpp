@@ -13,6 +13,10 @@
 #include "Input.h"
 #include "HotkeyManager.h"
 #include "BlurEffect.h"
+#include "GamepadInput.h"
+#include "UI.h"
+#include "MCM/MCMLiveSync.h"
+#include "MCM/MCMWidgetRenderer.h"
 
 #include <d3d11.h>
 #include <dxgi.h>
@@ -211,6 +215,17 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
 
+        // Fallback poll: keeps controller detection alive even if the game's
+        // input thread isn't polling its gamepad BSInputDevice (our vtable
+        // thunk would then never run). No-op when the input thread is active.
+        GamepadInput::EnsurePolled();
+
+        // Feed real controller state into ImGui's event queue. The Win32
+        // backend's own gamepad poll is compiled out (it would read zeroed
+        // state through our XInputGetState hook); this bridge uses the
+        // hook-bypassing snapshot from GamepadInput::Poll instead.
+        GamepadInput::InjectImGuiEvents();
+
         if (g_gameWindow) {
             RECT rect;
             GetClientRect(g_gameWindow, &rect);
@@ -218,6 +233,12 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
             io.DisplaySize.x = static_cast<float>(rect.right - rect.left);
             io.DisplaySize.y = static_cast<float>(rect.bottom - rect.top);
         }
+
+        // Record popup/edit state BEFORE NewFrame: ImGui's nav-cancel runs
+        // inside NewFrame and consumes B to close popups / stop editing, so
+        // the back-cascade below needs this pre-frame snapshot to know the
+        // press was already spent.
+        UI::PreNewFrameGamepadSnapshot();
 
         ImGui::NewFrame();
         HudManager::Render();
@@ -230,6 +251,20 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
             } else {
                 GameLock::SetState(GameLock::State::Locked);
                 io.MouseDrawCursor = true;
+
+                // B button (GamepadFaceRight) walks the back cascade first
+                // (cancel capture -> close popup / stop editing -> settings
+                // window -> content pane -> mod list); only when nothing is
+                // left to back out of does it close the menu. Start always
+                // closes immediately, mirroring ESC.
+                if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+                    if (!UI::HandleGamepadBack()) {
+                        WindowManager::Close();
+                    }
+                }
+                if (ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) {
+                    WindowManager::Close();
+                }
             }
             // Draw dark overlay behind menu windows when blur setting is active.
             GameLock::RenderBackgroundOverlay();
@@ -239,6 +274,15 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
             io.MouseDrawCursor = false;
             GameLock::SetState(GameLock::State::Unlocked);
         }
+
+        // End-of-frame MCM bookkeeping: fires OnMCMMenuOpen/Close on page
+        // transitions (including "menu just closed") and clears per-frame
+        // help-text state. Runs every frame, not only while windows are open.
+        MCMWidgetRenderer::OnFrameEnd();
+
+        // Deliver queued hotkey rebinds into the running native MCM as soon
+        // as the pause menu (where MCM's root.mcm object lives) is open.
+        MCMLiveSync::OnFrame();
 
         ImGui::EndFrame();
         ImGui::Render();
@@ -389,6 +433,19 @@ void Hooks::DevicePollHook::install() {
         VirtualProtect(&vTable[1], sizeof(void*), oldProtect, &oldProtect);
         logger::info("Mouse BSInputDevice::Poll VTable hook installed");
     }
+
+    auto* gamepad = mgr->devices[static_cast<std::int32_t>(RE::INPUT_DEVICE::kGamepad)];
+    if (gamepad) {
+        void** vTable = *reinterpret_cast<void***>(gamepad);
+        DWORD oldProtect;
+        VirtualProtect(&vTable[1], sizeof(void*), PAGE_READWRITE, &oldProtect);
+        originalGamepadPoll = reinterpret_cast<decltype(originalGamepadPoll)>(vTable[1]);
+        vTable[1] = reinterpret_cast<void*>(&gamepadThunk);
+        VirtualProtect(&vTable[1], sizeof(void*), oldProtect, &oldProtect);
+        logger::info("Gamepad BSInputDevice::Poll VTable hook installed");
+    } else {
+        logger::warn("No gamepad device found — gamepad toggle will rely on XInput polling");
+    }
 }
 
 void __fastcall Hooks::DevicePollHook::keyboardThunk(RE::BSInputDevice* device, float pollDelta) {
@@ -410,6 +467,30 @@ void __fastcall Hooks::DevicePollHook::mouseThunk(RE::BSInputDevice* device, flo
 
     if (WindowManager::ShouldTheGameBePaused()) {
         EnableImGuiInput();
+    } else {
+        DisableImGuiInput();
+    }
+}
+
+void __fastcall Hooks::DevicePollHook::gamepadThunk(RE::BSInputDevice* device, float pollDelta) {
+    originalGamepadPoll(device, pollDelta);
+
+    if (!UI::Renderer::initialized.load()) return;
+
+    // Process gamepad toggle detection and hotkey dispatch via XInput polling.
+    GamepadInput::Poll();
+
+    // Block gamepad input from reaching the game whenever ANY menu window is open,
+    // regardless of whether "freeze time" is enabled. This prevents the favorites
+    // menu, VATS, pipboy, etc. from activating while navigating our overlay.
+    if (WindowManager::IsAnyWindowOpen()) {
+        EnableImGuiInput();
+
+        // Clear the device's input state so the game sees no buttons pressed.
+        // This is the proper BSInputDevice virtual that zeros all tracked button data.
+        if (device) {
+            device->ClearInputState();
+        }
     } else {
         DisableImGuiInput();
     }
