@@ -331,10 +331,15 @@ void HotkeyManager::Load() {
     ini->SetSection("Hotkeys");
 
     // Update any already-registered entries with persisted values.
+    // Keyboard and gamepad use different name tables (F2 vs LB), so resolve
+    // with the device the entry was registered under.
     for (auto& [handle, entry] : entriesByHandle) {
         const char* val = ini->GetString(entry.id.c_str(), "");
         if (val && val[0] != '\0') {
-            int resolved = GetKeyBinding(std::string(val));
+            const auto device = entry.device == HotkeyDevice::Gamepad
+                ? RE::INPUT_DEVICE::kGamepad
+                : RE::INPUT_DEVICE::kKeyboard;
+            int resolved = GetKeyBinding(std::string(val), device);
             if (resolved != 0) {
                 entry.scanCode = static_cast<unsigned int>(resolved);
             }
@@ -349,7 +354,10 @@ void HotkeyManager::Save() {
     ini->SetSection("Hotkeys");
 
     for (auto& [handle, entry] : entriesByHandle) {
-        std::string keyName = GetKeyName(entry.scanCode, RE::INPUT_DEVICE::kKeyboard);
+        const auto device = entry.device == HotkeyDevice::Gamepad
+            ? RE::INPUT_DEVICE::kGamepad
+            : RE::INPUT_DEVICE::kKeyboard;
+        std::string keyName = GetKeyName(entry.scanCode, device);
         ini->SetString(entry.id.c_str(), keyName.c_str());
     }
 

@@ -217,6 +217,65 @@ namespace F4SEMenuFramework {
             }
             return false;
         }
+
+        // Register a gamepad hotkey. defaultConfigCode uses the same button codes as the
+        // framework's gamepad toggle setting (e.g. 4096=A, 8192=B, 256=LB, 9=LT, 10=RT).
+        // Persisted under [Hotkeys] with gamepad names (A, LB, ...).
+        inline int64_t RegisterGamepad(const char* id, unsigned int defaultConfigCode, HotkeyCallback callback) {
+            static auto func = Model::Internal::GetFunction<RegisterFunction>("RegisterGamepadHotkey");
+            if (func) {
+                return func(id, defaultConfigCode, callback);
+            }
+            return -1;
+        }
+    }
+
+    // True when an XInput controller is currently connected.
+    inline bool IsControllerConnected() {
+        using Fn = bool(*)();
+        static auto func = Model::Internal::GetFunction<Fn>("IsControllerConnected");
+        return func ? func() : false;
+    }
+
+    inline void DisposeTexture(std::string texturePath) {
+        using Fn = void(*)(const char*);
+        static auto func = Model::Internal::GetFunction<Fn>("DisposeTexture");
+        if (func) {
+            func(texturePath.c_str());
+        }
+    }
+
+    // Menu open/close / per-frame events from the framework.
+    // Type values match the framework's Event::EventType (same ABI as RegisterEvent).
+    namespace Events {
+        enum Type {
+            kNone = 0,
+            kOpenMenu = 1,
+            kCloseMenu = 2,
+            kBeforeRender = 3,
+            kAfterRender = 4
+        };
+        typedef void(__stdcall* Callback)(Type type);
+
+        inline int64_t Register(Callback callback) {
+            using Fn = int64_t(*)(Callback);
+            static auto func = Model::Internal::GetFunction<Fn>("RegisterEvent");
+            return func ? func(callback) : -1;
+        }
+
+        inline int64_t RegisterPriority(Callback callback, float priority) {
+            using Fn = int64_t(*)(Callback, float);
+            static auto func = Model::Internal::GetFunction<Fn>("RegisterEventPriority");
+            return func ? func(callback, priority) : -1;
+        }
+
+        inline void Unregister(int64_t id) {
+            using Fn = void(*)(int64_t);
+            static auto func = Model::Internal::GetFunction<Fn>("UnregisterEvent");
+            if (func) {
+                func(id);
+            }
+        }
     }
 }
 namespace FontAwesome {

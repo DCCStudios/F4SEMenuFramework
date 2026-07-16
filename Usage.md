@@ -1,35 +1,14 @@
+# F4SE Menu Framework — Usage
 
-import the F4SEMenuFramework.h into your header file, i reccomend you creating a UI.cpp/UI.h 
+Practical recipes for plugin authors. For a full project setup, see [PLUGIN_DEVELOPMENT_GUIDE.md](PLUGIN_DEVELOPMENT_GUIDE.md). For players and MCM JSON authors, see [README.md](README.md).
+
+Copy `resources/F4SEMenuFramework.h` into your project and include it (a small `UI.h` / `UI.cpp` pair works well):
+
 ```cpp
 #include "F4SEMenuFramework.h"
 ```
 
-Define the render function for your menu entry. Here is an example:
-
-```cpp
-void __stdcall UI::Example1::Render() {
-    ImGui::InputScalar("form id", ImGuiDataType_U32, &AddFormId, NULL, NULL, "%08X");
-
-    if (ImGui::Button("Search")) {
-        LookupForm();
-    }
-
-    if (AddBoundObject) {
-        ImGui::Text("How much %s would you like to add?", AddBoundObject->GetName());
-        ImGui::SliderInt("number", &Configuration::Example1::Number, 1, 100);
-        if (ImGui::Button("Add")) {
-            auto player = RE::PlayerCharacter::GetSingleton()->As<RE::TESObjectREFR>();
-            player->AddObjectToContainer(AddBoundObject, nullptr, Configuration::Example1::Number, nullptr);
-        }
-    } else {
-        ImGui::Text("Form not found");
-    }
-}
-```
-
-You should create a function in order to register your menu entries:
-
-You should check if the user has the menu framework installed before doing anything in the register function
+Always guard registration:
 
 ```cpp
 if (!F4SEMenuFramework::IsInstalled()) {
@@ -37,141 +16,158 @@ if (!F4SEMenuFramework::IsInstalled()) {
 }
 ```
 
-Before registering any entries, you should choose a section for your menu to be in. It is recommended that you use your mod name as the section name to keep things organized
+Register menus from **`kPostLoad`** or **`kPostPostLoad`** so the framework DLL is already mapped regardless of `plugins.txt` order.
+
+---
+
+## Menu pages
+
+Pick a section (usually your mod name), then add pages:
 
 ```cpp
-F4SEMenuFramework::SetSection("<menu section name>");
-```
-
-Register your menu entry, it will be a page on the Mod Control Panel
-
-```cpp
+F4SEMenuFramework::SetSection("My Mod");
 F4SEMenuFramework::AddSectionItem("Add Item", Example1::Render);
 ```
-Here is what this example will look like (The style of the picture is outdated):
 
-![image](https://github.com/Thiago099/SKSE-Menu-Framework-SDK/assets/66787043/8ebcd191-55a3-498b-bf36-0ca7337eff3a)
+Example render callback:
+
+```cpp
+void __stdcall UI::Example1::Render() {
+    ImGuiMCP::InputScalar("form id", ImGuiMCP::ImGuiDataType_U32, &AddFormId, NULL, NULL, "%08X");
+
+    if (ImGuiMCP::Button("Search")) {
+        LookupForm();
+    }
+
+    if (AddBoundObject) {
+        ImGuiMCP::Text("How much would you like to add?");
+        ImGuiMCP::SliderInt("number", &Configuration::Example1::Number, 1, 100);
+        if (ImGuiMCP::Button("Add")) {
+            auto player = RE::PlayerCharacter::GetSingleton();
+            // ... add items using CommonLibF4 APIs ...
+        }
+    } else {
+        ImGuiMCP::Text("Form not found");
+    }
+}
+```
+
+Folder-style paths work: `"Folder/Subfolder/Item"`.
+
+---
 
 ## Font Awesome
 
-Header file
 ```cpp
 namespace Example4 {
-	inline std::string TitleText = "This is an " + FontAwesome::UnicodeToUtf8(0xf2b4) + " Font Awesome usage example";
-	inline std::string Button1Text = FontAwesome::UnicodeToUtf8(0xf0e9) + " Umbrella";
-	inline std::string Button2Text = FontAwesome::UnicodeToUtf8(0xf06e) + " Eye";
-	void __stdcall Render();
+    inline std::string TitleText = "This is an " + FontAwesome::UnicodeToUtf8(0xf2b4) + " Font Awesome usage example";
+    inline std::string Button1Text = FontAwesome::UnicodeToUtf8(0xf0e9) + " Umbrella";
+    inline std::string Button2Text = FontAwesome::UnicodeToUtf8(0xf06e) + " Eye";
+    void __stdcall Render();
 }
 ```
-cpp file
 
 ```cpp
 void __stdcall UI::Example4::Render() {
     FontAwesome::PushBrands();
-    ImGui::Text(TitleText.c_str());
+    ImGuiMCP::Text(TitleText.c_str());
     FontAwesome::Pop();
 
     FontAwesome::PushSolid();
-    ImGui::Button(Button1Text.c_str());
+    ImGuiMCP::Button(Button1Text.c_str());
     FontAwesome::Pop();
 
-    ImGui::SameLine();
+    ImGuiMCP::SameLine();
 
     FontAwesome::PushRegular();
-    ImGui::Button(Button2Text.c_str());
+    ImGuiMCP::Button(Button2Text.c_str());
     FontAwesome::Pop();
 }
 ```
-Here is what this example will look like:
 
-![image](https://github.com/Thiago099/SKSE-Menu-Framework-SDK/assets/66787043/c3b7a913-fbb9-41be-ae38-d4c9efa8e2b3)
+Browse free icons at [fontawesome.com/search](https://fontawesome.com/search?o=r&m=free) and use the Unicode codepoint with `FontAwesome::UnicodeToUtf8`.
 
-
-You can browse icons and get the Unicode IDs from the [Font Awesome](https://fontawesome.com/search?o=r&m=free) website
-![image](https://github.com/Thiago099/SKSE-Menu-Framework-SDK/assets/66787043/ec5f14f1-5658-4f6e-8e60-2342f47f078e)
-
-
+---
 
 ## Creating your own windows
 
-Define your window render function
-
 ```cpp
 void __stdcall UI::Example2::RenderWindow() {
-    auto viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2{0.5f, 0.5f});
-    ImGui::SetNextWindowSize(ImVec2{viewport->Size.x * 0.4f, viewport->Size.y * 0.4f}, ImGuiCond_Appearing);
-    ImGui::Begin("My First Tool##MenuEntiryFromMod",nullptr, ImGuiWindowFlags_MenuBar); // If two mods have the same window name, and they open at the same time.
-                                                                                         // The window content will be merged, is good practice to add ##ModName after the window name.
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Open..", "Ctrl+O")) { /* Do stuff */
-            }
-            if (ImGui::MenuItem("Save", "Ctrl+S")) { /* Do stuff */
-            }
-            if (ImGui::MenuItem("Close", "Ctrl+W")) {
+    auto viewport = ImGuiMCP::GetMainViewport();
+    ImGuiMCP::SetNextWindowPos(
+        ImGuiMCP::ImVec2{viewport->Pos.x + viewport->Size.x * 0.5f,
+                         viewport->Pos.y + viewport->Size.y * 0.5f},
+        ImGuiMCP::ImGuiCond_Appearing,
+        ImGuiMCP::ImVec2{0.5f, 0.5f});
+    ImGuiMCP::SetNextWindowSize(
+        ImGuiMCP::ImVec2{viewport->Size.x * 0.4f, viewport->Size.y * 0.4f},
+        ImGuiMCP::ImGuiCond_Appearing);
+
+    // Always add ##YourModName so two mods with the same title don't merge windows.
+    ImGuiMCP::Begin("My First Tool##MyModName", nullptr, ImGuiMCP::ImGuiWindowFlags_MenuBar);
+
+    if (ImGuiMCP::BeginMenuBar()) {
+        if (ImGuiMCP::BeginMenu("File")) {
+            if (ImGuiMCP::MenuItem("Close", "Ctrl+W")) {
                 ExampleWindow->IsOpen = false;
             }
-            ImGui::EndMenu();
+            ImGuiMCP::EndMenu();
         }
-        ImGui::EndMenuBar();
+        ImGuiMCP::EndMenuBar();
     }
-    if (ImGui::Button("Close Window")) {
+
+    if (ImGuiMCP::Button("Close Window")) {
         ExampleWindow->IsOpen = false;
     }
-    ImGui::End();
+    ImGuiMCP::End();
 }
 ```
 
-Register your window. The register method will return an object with which you can set the `IsOpen` property from anywhere to open and close your window
-
 ```cpp
-UI::Example2::ExampleWindow = F4SEMenuFramework::AddWindow(Example2::RenderWindow);
-UI::Example2::ExampleWindow->IsOpen = true; 
+// true (default) = blocks game input while open
+UI::Example2::ExampleWindow = F4SEMenuFramework::AddWindow(Example2::RenderWindow, true);
+UI::Example2::ExampleWindow->IsOpen = true;
 ```
 
-Here is the example header
-
 ```cpp
-namespace Example2{
-void __stdcall RenderWindow();
-inline MENU_WINDOW ExampleWindow;
+namespace Example2 {
+    void __stdcall RenderWindow();
+    inline MENU_WINDOW ExampleWindow;
 }
 ```
 
-Here is what your window will look like:
+Pass `false` as the second argument for a non-blocking gameplay overlay (stays up after the Mod Control Panel closes). See the development guide §7.
 
-![image](https://github.com/Thiago099/SKSE-Menu-Framework-SDK/assets/66787043/c301cc1b-d435-47ad-9bdc-a635fa385986)
+---
 
 ## Plugin Hotkey API
 
-The framework provides a lightweight hotkey system that dispatches keyboard events via its WndProc hook and persists bindings to the `[Hotkeys]` section of `F4SEMenuFramework.ini`. Your plugin does not need its own WndProc hook or input handling — just register a callback.
+The framework owns keyboard (WndProc) and gamepad (XInput poll) dispatch and persists bindings in the `[Hotkeys]` section of `F4SEMenuFramework.ini`. Your plugin does **not** need its own WndProc hook for simple toggle keys.
 
-### Registering a hotkey
+### Register a keyboard hotkey
 
 ```cpp
 #include "F4SEMenuFramework.h"
 
 void __stdcall MyToggleCallback() {
-    // Called when the user presses the bound key (only while no blocking menu is open).
+    // Fires on first key-down while no blocking framework window is open.
     MyOverlay::Toggle();
 }
 
 void RegisterMyHotkeys() {
     if (!F4SEMenuFramework::IsInstalled()) return;
 
-    // "MyMod.ToggleOverlay" is a unique string id for this hotkey.
-    // 0x3C is the default DIK scan code (F2).
-    // If the user has already rebound it in F4SEMenuFramework.ini, that binding takes precedence.
+    // Unique string id + default DIK scan code (0x3C = F2).
+    // If the user already rebound this id in the INI, that value wins.
     F4SEMenuFramework::Hotkeys::Register("MyMod.ToggleOverlay", 0x3C, MyToggleCallback);
 }
 ```
 
-Call `RegisterMyHotkeys()` during your plugin's `F4SEPlugin_Load` or on `kPostPostLoad` messaging.
+Call `RegisterMyHotkeys()` from the same **`kPostLoad` / `kPostPostLoad`** path as menu registration (after `IsInstalled()` can succeed).
 
-### Registering multiple hotkeys
+### Register several hotkeys
 
-A mod can register as many hotkeys as it needs. Call `Register` once per action, each with a **unique string id** (use a mod prefix like `"MyMod.ActionName"` so ids stay distinct across plugins). Each registration gets its own handle, callback, and INI entry.
+Each action needs its own **unique id**. Prefer a mod prefix (`MyMod.…`).
 
 ```cpp
 void __stdcall OnToggleOverlay() { /* ... */ }
@@ -187,77 +183,159 @@ void RegisterMyHotkeys() {
 }
 ```
 
-Re-registering the **same id** does not create a second hotkey — it updates the callback on the existing entry and returns the same handle.
+Re-registering the **same id** updates the callback and returns the same handle (it does not create a second hotkey).
 
-### Querying the current binding
-
-If your mod has its own settings UI and wants to display the current key:
+### Gamepad hotkeys
 
 ```cpp
-unsigned int currentScanCode = F4SEMenuFramework::Hotkeys::GetBinding("MyMod.ToggleOverlay");
-// Convert to a display name using your own key name table or the framework's GetToggleKeyName pattern.
-```
+// Config codes match the framework Settings gamepad list:
+//   A=4096, B=8192, X=16384, Y=32768, LB=256, RB=512, LT=9, RT=10, …
+F4SEMenuFramework::Hotkeys::RegisterGamepad("MyMod.ToggleOverlay.Pad", 4096, MyToggleCallback);
 
-### Rebinding from your own UI
-
-```cpp
-// User selected a new key (e.g. from an ImGui combo or "press a key" prompt):
-unsigned int newScanCode = 0x43; // F9
-F4SEMenuFramework::Hotkeys::SetBinding("MyMod.ToggleOverlay", newScanCode);
-// This automatically persists to F4SEMenuFramework.ini.
-// If another mod already uses F9, a warning notification is shown on-screen.
-```
-
-### Checking for conflicts before rebinding
-
-You can proactively check if a scan code is already in use before committing the rebind:
-
-```cpp
-unsigned int candidateKey = 0x43; // F9
-if (F4SEMenuFramework::Hotkeys::HasConflict(candidateKey, "MyMod.ToggleOverlay")) {
-    // Show a confirmation dialog in your UI, e.g.:
-    // "F9 is already used by another mod. Bind anyway?"
-} else {
-    F4SEMenuFramework::Hotkeys::SetBinding("MyMod.ToggleOverlay", candidateKey);
+if (F4SEMenuFramework::IsControllerConnected()) {
+    // optional UX: show pad-specific hints in your UI
 }
 ```
 
-Even without this check, `SetBinding` will still display a brief warning popup (top-right corner) whenever a conflict is detected, so users are always informed.
+Gamepad bindings are stored in `[Hotkeys]` with names like `A` / `LB` (not DIK names).
 
-### Unregistering
+### Query / rebind from your own UI
 
-If you need to remove a hotkey (e.g. your overlay is destroyed):
+```cpp
+unsigned int current = F4SEMenuFramework::Hotkeys::GetBinding("MyMod.ToggleOverlay");
+
+unsigned int candidate = 0x43; // F9
+if (F4SEMenuFramework::Hotkeys::HasConflict(candidate, "MyMod.ToggleOverlay")) {
+    // Ask the user in your UI first, or let SetBinding show the framework dialog.
+}
+
+F4SEMenuFramework::Hotkeys::SetBinding("MyMod.ToggleOverlay", candidate);
+// Persists to F4SEMenuFramework.ini when applied.
+```
+
+**Conflict behavior (important):** if the new code is already used by another registered hotkey, `SetBinding` does **not** apply immediately. The framework opens a **confirmation dialog**; the binding is written only if the user confirms. `HasConflict` lets you warn earlier in your own UI. Unbinding with scan code `0` never conflicts.
+
+### Unregister
 
 ```cpp
 int64_t handle = F4SEMenuFramework::Hotkeys::Register("MyMod.ToggleOverlay", 0x3C, MyToggleCallback);
-// ... later ...
+// ...
 F4SEMenuFramework::Hotkeys::Unregister(handle);
 ```
 
 ### Common DIK scan codes
 
-| Key | Scan Code |
-|-----|-----------|
-| F1  | 0x3B      |
-| F2  | 0x3C      |
-| F3  | 0x3D      |
-| F4  | 0x3E      |
-| F5  | 0x3F      |
-| F6  | 0x40      |
-| F7  | 0x41      |
-| F8  | 0x42      |
-| F9  | 0x43      |
-| F10 | 0x44      |
-| F11 | 0x57      |
-| F12 | 0x58      |
-| HOME | 0xC7     |
-| INSERT | 0xD2   |
-| DELETE | 0xD3   |
+| Key | Scan code | Key | Scan code |
+|-----|-----------|-----|-----------|
+| F1 | `0x3B` | F7 | `0x41` |
+| F2 | `0x3C` | F8 | `0x42` |
+| F3 | `0x3D` | F9 | `0x43` |
+| F4 | `0x3E` | F10 | `0x44` |
+| F5 | `0x3F` | F11 | `0x57` |
+| F6 | `0x40` | F12 | `0x58` |
+| HOME | `0xC7` | INSERT | `0xD2` |
+| DELETE | `0xD3` | LEFT CTRL | `0x1D` |
 
 ### Behavior notes
 
-- Each hotkey needs a **unique id**; use a mod prefix (e.g. `MyMod.ToggleOverlay`, `MyMod.OpenDebug`).
-- Hotkeys only fire on **first key-down** (not held repeats).
-- Hotkeys are **suppressed** while any blocking framework window is open (the game is "paused").
-- Multiple hotkeys can share the same scan code — all matching callbacks will fire.
-- The `[Hotkeys]` INI section uses key names (e.g. `F2`, `HOME`, `LEFTCONTROL`) not raw numbers.
+- Hotkeys fire on **first press** only (not key-repeat).
+- Keyboard hotkeys are **suppressed** while any **blocking** framework window is open (`BlockUserInput == true`).
+- Multiple hotkeys may share one scan code — **all** matching callbacks run.
+- INI values use names (`F2`, `HOME`, `LB`), not raw numbers.
+- Prefer this API over rolling your own `AddInputEvent` toggle unless you need full `RE::InputEvent` access.
+
+---
+
+## MCM translation layer
+
+You usually **do not** call a C++ “MCM API” from your F4SE plugin for this. The framework scans disk and builds pages itself. This section explains how that interacts with your mod.
+
+### If you ship an MCM config (JSON / Papyrus)
+
+Keep the standard layout:
+
+```
+Data/MCM/Config/MyMod/config.json
+Data/MCM/Config/MyMod/settings.ini      ; optional defaults
+Data/MCM/Config/MyMod/keybinds.json     ; optional
+```
+
+Players with F4SE Menu Framework see your UI under **MCM Mod Settings → \<displayName\>**.  
+Players with native MCM use the classic MCM. One package serves both.
+
+Settings live in `Data/MCM/Settings/MyMod.ini` (created/updated when the user changes values). Do not put user saves only in `Config\...\settings.ini` — that file is for **defaults**.
+
+### If your Papyrus script calls `MCM.*`
+
+Use the normal MCM script API (`GetModSettingInt`, `SetModSettingFloat`, `RegisterForExternalEvent`, …). Sources for the stub script are in `public/Scripts/Source/User/MCM.psc`.
+
+| Situation | Who provides `MCM.*` natives |
+|-----------|------------------------------|
+| `mcm.dll` **not** loaded | F4SE Menu Framework (if MCM compat is enabled) |
+| `mcm.dll` **loaded** | Native MCM only (framework skips registering natives) |
+
+`MCM.GetVersionCode()` from the framework reports **9** (aligned with MCM 1.40-style checks).
+
+### If you are a C++ plugin author
+
+- Prefer the framework’s own `AddSectionItem` pages for native ImGui UX.
+- Or ship an MCM `config.json` and let the translation layer host it — useful for supporting players who already know MCM tooling.
+- Do **not** assume translated pages exist: users can disable `[MCMCompat] Enabled`, or native MCM may be present with coexistence off.
+
+### Player toggles (also in framework Settings)
+
+```ini
+[MCMCompat]
+Enabled = true
+MCMCompatWhenNativePresent = false
+```
+
+Changing these in the UI requires a **game restart** before pages are (re)scanned.
+
+### Coexistence with native MCM
+
+When both are installed and `MCMCompatWhenNativePresent = true`:
+
+- Duplicate menus are possible (classic MCM + **MCM Mod Settings**).
+- Settings files are shared; the framework reloads INIs when its overlay opens.
+- Hotkey rebinds can sync with the running MCM while the pause menu movie is loaded (opening via the pause-menu **F4SE Framework** button keeps that movie under the overlay).
+
+When coexistence is **off** (default with `mcm.dll` present), the framework does not register translated MCM pages — native MCM remains the single UI.
+
+---
+
+## Textures
+
+```cpp
+ImTextureID tex = F4SEMenuFramework::LoadTexture("Data\\F4SE\\Plugins\\MyMod\\icon.svg", {64, 64});
+ImTextureID tex2 = F4SEMenuFramework::LoadTexture("Data\\F4SE\\Plugins\\MyMod\\photo.png");
+F4SEMenuFramework::DisposeTexture("Data\\F4SE\\Plugins\\MyMod\\icon.svg");
+```
+
+Paths are relative to the game root (`Fallout4.exe`). PNG, JPG, and SVG are supported; results are cached.
+
+---
+
+## Menu open / close events
+
+```cpp
+void __stdcall OnMenuEvent(F4SEMenuFramework::Events::Type type) {
+    if (type == F4SEMenuFramework::Events::kOpenMenu)  { /* overlay opened */ }
+    if (type == F4SEMenuFramework::Events::kCloseMenu) { /* overlay closed */ }
+}
+
+int64_t id = F4SEMenuFramework::Events::Register(OnMenuEvent);
+// F4SEMenuFramework::Events::Unregister(id);
+```
+
+Also available: `kBeforeRender`, `kAfterRender`, and `Events::RegisterPriority(callback, priority)`.
+
+---
+
+## Toggle key display name
+
+```cpp
+const char* keyName = F4SEMenuFramework::GetToggleKeyName(); // e.g. "BRACKETRIGHT"
+```
+
+This is the **framework menu** toggle (from INI / Settings), not your plugin hotkeys.

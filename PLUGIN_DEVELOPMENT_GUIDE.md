@@ -1,6 +1,6 @@
 # F4SE Menu Framework 3 — Plugin Development Guide
 
-This guide covers everything you need to build an F4SE plugin that adds in-game ImGui menus via the **F4SE Menu Framework 3**. The framework handles all DirectX 11 hooking, ImGui rendering, input capture, and window management. Your plugin just registers callbacks and draws widgets.
+This guide covers everything you need to build an F4SE plugin that adds in-game ImGui menus via the **F4SE Menu Framework 3**. The framework handles DirectX 11 hooking, ImGui rendering, input capture, window management, named hotkeys, and (optionally) translating existing MCM configs into ImGui pages. Your plugin registers callbacks and draws widgets — or ships a normal MCM package and lets the translation layer host it.
 
 ---
 
@@ -15,12 +15,17 @@ This guide covers everything you need to build an F4SE plugin that adds in-game 
 7. [Windows (Popup Panels)](#7-windows-popup-panels)
 8. [HUD Overlays](#8-hud-overlays)
 9. [Input Events](#9-input-events)
-10. [Loading Textures and Images](#10-loading-textures-and-images)
-11. [Font Awesome Icons](#11-font-awesome-icons)
-12. [Working with Game Forms (CommonLibF4)](#12-working-with-game-forms-commonlibf4)
-13. [Build and Deploy](#13-build-and-deploy)
-14. [Gotchas and F4SE-Specific Differences](#14-gotchas-and-f4se-specific-differences)
-15. [Complete Minimal Plugin](#15-complete-minimal-plugin)
+10. [Plugin Hotkey API](#10-plugin-hotkey-api)
+11. [MCM Translation Layer](#11-mcm-translation-layer)
+12. [Loading Textures and Images](#12-loading-textures-and-images)
+13. [Font Awesome Icons](#13-font-awesome-icons)
+14. [Working with Game Forms (CommonLibF4)](#14-working-with-game-forms-commonlibf4)
+15. [Build and Deploy](#15-build-and-deploy)
+16. [Gotchas and F4SE-Specific Differences](#16-gotchas-and-f4se-specific-differences)
+17. [Complete Minimal Plugin](#17-complete-minimal-plugin)
+18. [Framework Internals — How the Hooks Work](#18-framework-internals--how-the-hooks-work)
+
+> Shorter copy-paste recipes (including hotkeys and MCM notes for non-C++ authors): [Usage.md](Usage.md). Player / overview: [README.md](README.md).
 
 ---
 
@@ -297,11 +302,13 @@ The header works via **runtime dynamic linking**: it resolves `F4SEMenuFramework
 - The framework DLL must be **mapped into the process** before your draw callbacks run (F4SE loads it as a normal plugin; load order vs. your DLL can vary — the header re-queries the module handle instead of caching it once at static init).
 - You should always check `F4SEMenuFramework::IsInstalled()` before calling any framework functions (`IsInstalled` is true when `GetModuleHandleW` succeeds, not when `exists("Data/...")` relative to CWD).
 
-The header provides two namespaces:
+The header provides these namespaces:
 
 | Namespace | Purpose |
 |-----------|---------|
-| `F4SEMenuFramework::` | Framework API (register menus, windows, input, textures) |
+| `F4SEMenuFramework::` | Framework API (menus, windows, input, textures, events, gamepad query) |
+| `F4SEMenuFramework::Hotkeys::` | Named hotkey registration / rebind helpers |
+| `F4SEMenuFramework::Events::` | Menu open/close / render lifecycle callbacks |
 | `ImGuiMCP::` | Full Dear ImGui API (buttons, text, tables, draw lists, etc.) |
 | `FontAwesome::` | Icon font helpers |
 
@@ -794,9 +801,115 @@ RE::INPUT_DEVICE::kMouse
 RE::INPUT_DEVICE::kGamepad
 ```
 
+> Prefer the [Plugin Hotkey API](#10-plugin-hotkey-api) for simple “press key → run callback” toggles. Use `AddInputEvent` when you need the full `RE::InputEvent` stream (held duration, mouse, etc.).
+
 ---
 
-## 10. Loading Textures and Images
+## 10. Plugin Hotkey API
+
+Register named hotkeys without writing your own WndProc. The framework dispatches keyboard presses from its window procedure and gamepad presses from its XInput poll, and stores bindings in `[Hotkeys]` inside `F4SEMenuFramework.ini`.
+
+### Minimal example
+
+```cpp
+void __stdcall OnToggleMyOverlay() {
+    MyWindow::Handle->IsOpen = !MyWindow::Handle->IsOpen;
+}
+
+void UI::RegisterHotkeys() {
+    if (!F4SEMenuFramework::IsInstalled()) return;
+
+    // id must be unique across mods — use a prefix
+    F4SEMenuFramework::Hotkeys::Register("MyMod.ToggleOverlay", 0x3C, OnToggleMyOverlay); // F2
+
+    // Optional gamepad binding (4096 = A; same codes as framework Settings)
+    F4SEMenuFramework::Hotkeys::RegisterGamepad("MyMod.ToggleOverlay.Pad", 4096, OnToggleMyOverlay);
+}
+```
+
+Call `RegisterHotkeys()` from the same **`kPostLoad` / `kPostPostLoad`** callback as `UI::Register()`.
+
+### Query, rebind, conflicts
+
+```cpp
+unsigned int code = F4SEMenuFramework::Hotkeys::GetBinding("MyMod.ToggleOverlay");
+
+if (F4SEMenuFramework::Hotkeys::HasConflict(0x43, "MyMod.ToggleOverlay")) {
+    // F9 already used — confirm in your UI, or call SetBinding anyway
+}
+F4SEMenuFramework::Hotkeys::SetBinding("MyMod.ToggleOverlay", 0x43);
+```
+
+If `SetBinding` targets a code already used by another registered hotkey, the framework shows a **confirmation dialog** and applies the change only if the user confirms. Unbind with `0` (never conflicts).
+
+```cpp
+int64_t handle = F4SEMenuFramework::Hotkeys::Register("MyMod.ToggleOverlay", 0x3C, OnToggleMyOverlay);
+F4SEMenuFramework::Hotkeys::Unregister(handle);
+```
+
+### Rules of thumb
+
+| Topic | Behavior |
+|-------|----------|
+| Persistence | Names in INI (`F2`, `LB`, …), not raw integers |
+| When callbacks run | First press only; keyboard hotkeys suppressed while a **blocking** framework window is open |
+| Same id twice | Updates callback; returns existing handle |
+| Same key, different ids | Allowed — every matching callback fires |
+| Gamepad connected? | `F4SEMenuFramework::IsControllerConnected()` |
+
+Copy-paste tables and more examples: [Usage.md — Plugin Hotkey API](Usage.md#plugin-hotkey-api).
+
+---
+
+## 11. MCM Translation Layer
+
+The framework can host existing **Mod Configuration Menu** packages as ImGui pages under **MCM Mod Settings**, and optionally provide the MCM Papyrus natives when `mcm.dll` is not present.
+
+### Who needs to read this?
+
+| Audience | What to do |
+|----------|------------|
+| MCM mod author (JSON / Papyrus only) | Ship a normal MCM package. No C++ required. |
+| Player | Enable/disable under framework Settings or `[MCMCompat]` in the INI. |
+| F4SE plugin author | Use `AddSectionItem` for native pages, **or** ship MCM JSON and let the layer host it. |
+
+### On-disk layout (unchanged from MCM)
+
+```
+Data/MCM/Config/MyMod/config.json       ; menu layout (required)
+Data/MCM/Config/MyMod/settings.ini      ; author defaults (optional)
+Data/MCM/Config/MyMod/keybinds.json     ; hotkey definitions (optional)
+Data/MCM/Settings/MyMod.ini             ; user values (runtime; written by MCM or this layer)
+```
+
+### Runtime behavior (verified against this codebase)
+
+1. **Scan / build pages** runs during `kGameDataReady` via `MCMRegistry::Init()` when `Config::MCMCompatEnabled` is true.
+2. **Native MCM detection** is `GetModuleHandleA("mcm.dll")` — not plugin name matching.
+3. If `mcm.dll` is present and `MCMCompatWhenNativePresent` is false (default), translated pages are **not** registered (native MCM stays sole UI).
+4. If `mcm.dll` is **absent**, the framework registers `MCM.*` Papyrus natives (`GetModSetting*`, `SetModSetting*`, `RefreshMenu`, …) and `GetVersionCode()` returns **9**.
+5. If `mcm.dll` is present, Papyrus native registration is **skipped** so the real MCM owns those bindings.
+6. Coexistence (both UIs) shares the same settings INIs; the overlay reloads from disk on open. Hotkeys can live-sync through MCM’s pause-menu Scaleform object when that movie is loaded.
+
+### INI / Settings UI
+
+```ini
+[MCMCompat]
+Enabled = true
+MCMCompatWhenNativePresent = false
+```
+
+Toggles in the framework Settings window require a **game restart** to rescan.
+
+### Pause-menu entry
+
+Shipping `Data/Interface/F4SEFramework.swf` adds an **"F4SE Framework"** row to the ESC pause list. Selecting it opens the ImGui overlay **on top of** the pause menu (the pause menu is not dismissed — input to it is blocked while the overlay is open). That keeps MCM’s `root.mcm` object available for live hotkey sync when coexistence is on.
+
+Player-oriented summary: [README.md — MCM translation layer](README.md#mcm-translation-layer).
+
+---
+
+## 12. Loading Textures and Images
 
 The framework can load PNG, JPG, and SVG images for use as ImGui textures. Results are cached internally.
 
@@ -822,7 +935,7 @@ void __stdcall MyRender() {
 
 ---
 
-## 11. Font Awesome Icons
+## 13. Font Awesome Icons
 
 The framework bundles Font Awesome 6. Use the helper functions to push icon fonts:
 
@@ -855,7 +968,7 @@ Find icon Unicode codepoints at [fontawesome.com/icons](https://fontawesome.com/
 
 ---
 
-## 12. Working with Game Forms (CommonLibF4)
+## 14. Working with Game Forms (CommonLibF4)
 
 ### Looking Up Forms
 
@@ -917,7 +1030,7 @@ F4SE::GetMessagingInterface()->RegisterListener(
 
 ---
 
-## 13. Build and Deploy
+## 15. Build and Deploy
 
 ### Configure and Build
 
@@ -943,8 +1056,10 @@ Also ensure the framework is installed:
 Fallout 4/Data/F4SE/Plugins/F4SEMenuFramework.dll
 Fallout 4/Data/F4SE/Plugins/F4SEMenuFramework.ini
 Fallout 4/Data/F4SE/Plugins/F4SEMenuFrameworkStrings.json
-Fallout 4/Data/F4SE/Plugins/Fonts/               (font files)
-Fallout 4/Data/F4SE/Plugins/F4SEMenuFrameworkThemes/  (theme files)
+Fallout 4/Data/F4SE/Plugins/Fonts/                      (font files)
+Fallout 4/Data/F4SE/Plugins/F4SEMenuFrameworkThemes/    (theme files)
+Fallout 4/Data/F4SE/Plugins/F4SEMenuFramework/Gamepad/  (button glyphs)
+Fallout 4/Data/Interface/F4SEFramework.swf              (pause-menu button; optional)
 ```
 
 ### Auto-Copy on Build
@@ -953,7 +1068,7 @@ Set the `FALLOUT4_FOLDER` environment variable to your game install path and the
 
 ---
 
-## 14. Gotchas and F4SE-Specific Differences
+## 16. Gotchas and F4SE-Specific Differences
 
 ### vs. SKSE Menu Framework
 
@@ -963,7 +1078,7 @@ If you're porting a plugin from the SKSE version, here are the key changes:
 |------|------|------|
 | Consumer header | `SKSEMenuFramework.h` | `F4SEMenuFramework.h` |
 | Framework namespace | `SKSEMenuFramework::` | `F4SEMenuFramework::` |
-| DLL check path | `Data/SKSE/Plugins/SKSEMenuFramework.dll` | `Data/F4SE/Plugins/F4SEMenuFramework.dll` |
+| Install check | Often path `exists(...)` | `GetModuleHandleW(L"F4SEMenuFramework.dll")` via `IsInstalled()` — must be loaded in-process |
 | Entry point | `SKSEPluginLoad()` | `F4SEPlugin_Query()` + `F4SEPlugin_Load()` |
 | Data loaded event | `SKSE::MessagingInterface::kDataLoaded` | `F4SE::MessagingInterface::kGameDataReady` |
 | Input event cast | `event->AsButtonEvent()` | `event->As<RE::ButtonEvent>()` |
@@ -981,12 +1096,12 @@ If you're porting a plugin from the SKSE version, here are the key changes:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Your plugin never registers a Mod Menu section (no crash), `IsInstalled()` is false | Older consumer headers used `std::filesystem::exists("Data/F4SE/Plugins/F4SEMenuFramework.dll")`, which is **relative to the process working directory** — MO2/modlist instances often launch with CWD **not** the game root, so the check fails even when the DLL is installed | Use a header where `IsInstalled()` is implemented as **`GetModuleHandleW(L"F4SEMenuFramework.dll")` (or base name) ≠ nullptr** — the framework must be **loaded in-process**, not merely present on disk. Also avoid caching `GetModuleHandle` in a **static** initialized at your DLL load: F4SE can load your plugin **before** `F4SEMenuFramework.dll` is mapped; resolve the module handle **per call** (or at least after `kGameDataReady`). |
-| ImGui overlay never appears, no crash | D3D11 `Present` hook installed on a dummy device VTable instead of the game's real swap chain | Hook `D3D11CreateDeviceAndSwapChain` via `write_call<5>` on call site `REL::ID(224250)+0x419` and patch the real swap chain's VTable inside (see §16) |
+| ImGui overlay never appears, no crash | D3D11 `Present` hook installed on a dummy device VTable instead of the game's real swap chain | Hook `D3D11CreateDeviceAndSwapChain` via `write_call<5>` on call site `REL::ID(224250)+0x419` and patch the real swap chain's VTable inside (see §18) |
 | D3D11 IAT hook installed but thunk never called | Game caches the `D3D11CreateDeviceAndSwapChain` function pointer from the IAT during early init, before F4SE plugins load. Patching the IAT entry afterward has no effect | Use `write_call<5>` on the call site (`REL::ID(224250)+0x419`) instead of IAT replacement (`REL::ID(254484)`) — this patches the CALL instruction itself, which cannot be bypassed |
 | Crash on startup in `keyboardThunk` or `mouseThunk` (RCX=0) | `ImGui::GetIO()` called before `ImGui::CreateContext()` — input device poll hooks run before first `Present` call | Guard: `if (!initialized.load()) return;` in all input thunks |
 | Menu renders but mouse can't click anything | Game's `ClipCursor()` confines cursor to a narrow area | Hook `ClipCursor` via IAT (`REL::ID(641385)`) and pass full window rect when menu is open |
 | Menu renders but player still walks/shoots | Game still processing keyboard/mouse input | Set `RE::ControlMap::GetSingleton()->ignoreKeyboardMouse = true` when menu opens |
-| Toggle key (F1) doesn't open menu, no crash | Hotkey detection was in `BSInputDevice::Poll` hooks or `RE::InputEvent` processing, but those never receive keypress data usable for toggling | Move toggle key detection to `WndProcHook` via `WM_KEYDOWN` — extract scan code from `lParam` bits 16–23 and compare with DIK code. Both Shadow-Boost and GunMover use this pattern (see §16) |
+| Toggle key doesn't open menu, no crash | Hotkey detection was in `BSInputDevice::Poll` hooks or `RE::InputEvent` processing, but those never receive keypress data usable for toggling | Move toggle key detection to `WndProcHook` via `WM_KEYDOWN` — extract scan code from `lParam` bits 16–23 and compare with DIK code. Both Shadow-Boost and GunMover use this pattern (see §18). Default shipped toggle is `BRACKETRIGHT` (`]`), not F1 — check `F4SEMenuFramework.ini`. |
 | Menu opens but game still processes input alongside ImGui | WndProc always calls the original `WndProc` even when menu is active | When menu is active, forward to `ImGui_ImplWin32_WndProcHandler` and `return true` to block the game. Only call original WndProc when menu is closed |
 
 ### Common Compile Errors and Fixes
@@ -1003,7 +1118,7 @@ If you're porting a plugin from the SKSE version, here are the key changes:
 
 ---
 
-## 15. Complete Minimal Plugin
+## 17. Complete Minimal Plugin
 
 Here is the absolute minimum for a working plugin with one menu page:
 
@@ -1098,17 +1213,26 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(
     SetupLog();
     logger::info("{} v{} loading", Plugin::NAME, Plugin::VERSION.string());
     F4SE::Init(a_f4se);
-    UI::Register();
+
+    // Defer UI registration until every plugin has finished Load — otherwise
+    // IsInstalled() can be false if your DLL sorts before F4SEMenuFramework.
+    F4SE::GetMessagingInterface()->RegisterListener(
+        [](F4SE::MessagingInterface::Message* msg) {
+            if (msg && msg->type == F4SE::MessagingInterface::kPostLoad) {
+                UI::Register();
+            }
+        });
+
     logger::info("{} loaded", Plugin::NAME);
     return true;
 }
 ```
 
-Build it, drop the DLL into `Data/F4SE/Plugins/`, launch the game with F4SE, and press the framework's toggle key (default: **F1**) to see your menu in the Mod Control Panel.
+Build it, drop the DLL into `Data/F4SE/Plugins/` (with the framework installed), launch with F4SE, and open the Mod Control Panel with the framework toggle key (shipped default: **`]` / `BRACKETRIGHT`** — see `F4SEMenuFramework.ini` / Settings).
 
 ---
 
-## 16. Framework Internals — How the Hooks Work
+## 18. Framework Internals — How the Hooks Work
 
 This section documents how the framework hooks into the game engine. You don't need to do any of this in your consumer plugin — the framework handles it all. This is reference material for understanding what happens behind the scenes and for anyone maintaining or forking the framework.
 
