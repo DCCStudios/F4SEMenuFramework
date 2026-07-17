@@ -10,6 +10,7 @@
 #include "F4SEMenuFramework.h"
 #include "Application.h"
 #include "GamepadInput.h"
+#include "UI.h"  // UI::FuzzyMatch for the settings search
 #include "imgui.h"
 #include "TextureLoader.h"
 
@@ -70,6 +71,11 @@ namespace MCMWidgetRenderer {
     // --- Page open/close tracking for OnMCMMenuOpen/Close events ---
     static std::string s_renderedModThisFrame;  // set by RenderSlot each frame
     static std::string s_currentOpenMod;        // mod whose page is currently displayed
+
+    // --- Settings search (right-panel search box in the main window) ---
+    // Set each frame by the main window before the page renders; RenderPage
+    // hides controls that don't match. Empty = no filtering.
+    static std::string s_pageSearch;
 
     // --- Page thunk infrastructure (namespace scope) ---
     // Each MCM page gets assigned a slot. When the framework calls the thunk,
@@ -1028,8 +1034,68 @@ namespace MCMWidgetRenderer {
 
     // --- Page rendering ---
     static void RenderPage(const MCMConfigParser::MCMPage& page, ModRenderContext& ctx) {
-        for (const auto& ctrl : page.controls) {
-            RenderControl(ctrl, page, ctx);
+        const auto& ctrls = page.controls;
+
+        // No search active — render everything as-is.
+        if (s_pageSearch.empty()) {
+            for (const auto& ctrl : ctrls) {
+                RenderControl(ctrl, page, ctx);
+            }
+            return;
+        }
+
+        // Settings search active. A control matches on its label, help text
+        // or id (fuzzy — see UI::FuzzyMatch). Section headers group the
+        // controls that follow them, so:
+        //  - a matching section header shows its ENTIRE section, and
+        //  - a section header stays visible when any control inside matches
+        //    (results keep their context).
+        // hiddenSwitcher controls always pass through: they render nothing
+        // but seed the group-condition state other controls depend on.
+        auto ctrlMatches = [](const MCMConfigParser::MCMControl& c) {
+            return UI::FuzzyMatch(s_pageSearch.c_str(), c.text.c_str()) ||
+                   (!c.help.empty() && UI::FuzzyMatch(s_pageSearch.c_str(), c.help.c_str())) ||
+                   (!c.id.empty() && UI::FuzzyMatch(s_pageSearch.c_str(), c.id.c_str()));
+        };
+
+        std::vector<char> show(ctrls.size(), 0);
+        bool anyShown = false;
+        size_t i = 0;
+        while (i < ctrls.size()) {
+            if (ctrls[i].type == "section") {
+                size_t end = i + 1;
+                while (end < ctrls.size() && ctrls[end].type != "section") ++end;
+
+                const bool headerMatch = ctrlMatches(ctrls[i]);
+                bool anyChildMatch = false;
+                for (size_t j = i + 1; j < end; ++j) {
+                    if (ctrls[j].type == "hiddenSwitcher") {
+                        show[j] = 1;  // always processed, renders nothing
+                        continue;
+                    }
+                    if (headerMatch || ctrlMatches(ctrls[j])) {
+                        show[j] = 1;
+                        anyChildMatch = true;
+                    }
+                }
+                show[i] = (headerMatch || anyChildMatch) ? 1 : 0;
+                if (show[i]) anyShown = true;
+                i = end;
+            } else {
+                show[i] = (ctrls[i].type == "hiddenSwitcher" || ctrlMatches(ctrls[i])) ? 1 : 0;
+                if (show[i] && ctrls[i].type != "hiddenSwitcher") anyShown = true;
+                ++i;
+            }
+        }
+
+        for (size_t k = 0; k < ctrls.size(); ++k) {
+            if (show[k]) {
+                RenderControl(ctrls[k], page, ctx);
+            }
+        }
+
+        if (!anyShown) {
+            ImGui::TextDisabled("No settings match \"%s\".", s_pageSearch.c_str());
         }
     }
 
@@ -1050,14 +1116,14 @@ namespace MCMWidgetRenderer {
             }
 
             const auto& page = config.pages[i];
-            // Grouped under "MCM Mod Settings" in the F4SE Menu Framework tree.
+            // Grouped under "MCM Mod Configs (Legacy)" in the F4SE Menu Framework tree.
             // The tree renderer gives this category a distinct accent color so
             // translated MCM menus are visually separate from native pages.
             std::string path;
             if (config.pages.size() == 1) {
-                path = "MCM Mod Settings/" + config.displayName;
+                path = "MCM Mod Configs (Legacy)/" + config.displayName;
             } else {
-                path = "MCM Mod Settings/" + config.displayName + "/" + page.pageDisplayName;
+                path = "MCM Mod Configs (Legacy)/" + config.displayName + "/" + page.pageDisplayName;
             }
 
             size_t slot = s_nextPageSlot++;
@@ -1135,6 +1201,18 @@ namespace MCMWidgetRenderer {
 
     void CancelHotkeyCapture() {
         s_captureActive = false;
+    }
+
+    bool IsMCMPageFunction(void(__stdcall* fn)()) {
+        if (!fn) return false;
+        for (size_t i = 0; i < s_nextPageSlot && i < MAX_MCM_PAGES; ++i) {
+            if (s_pageThunks[i] == fn) return true;
+        }
+        return false;
+    }
+
+    void SetPageSearchFilter(const char* text) {
+        s_pageSearch = text ? text : "";
     }
 
 } // namespace MCMWidgetRenderer

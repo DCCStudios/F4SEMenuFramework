@@ -11,6 +11,13 @@ namespace UI {
         std::string Title;
     };
     extern UI::MenuTree* RootMenu;
+
+    // Fuzzy text match used by the menu searches. Every whitespace-separated
+    // token of `needle` must match `haystack` either as a case-insensitive
+    // substring or as an in-order character subsequence ("fovsl" matches
+    // "FOV Slider and Player Height"). Empty needle matches everything.
+    bool FuzzyMatch(const char* needle, const char* haystack);
+
     void __stdcall RenderMenuWindow();
     void AddToTree(UI::MenuTree* node, std::vector<std::string>& path, RenderFunction render, std::string title);
     void __stdcall RenderConfigWindow();

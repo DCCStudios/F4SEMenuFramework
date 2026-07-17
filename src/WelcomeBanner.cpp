@@ -2,6 +2,7 @@
 #include "HudManager.h"
 #include "Config.h"
 #include "Application.h"
+#include "GamepadInput.h"
 #include "imgui.h"
 
 namespace WelcomeBanner {
@@ -46,6 +47,23 @@ namespace WelcomeBanner {
         std::string keyName = GetKeyName(Config::ToggleKey, RE::INPUT_DEVICE::kKeyboard);
         std::string message = std::format("Press [{}] to open Mod Control Panel", keyName);
 
+        // Companion line for controller users: show the gamepad binding AND
+        // its activation mode (hold / double-press change how the button is
+        // used, so the mode is part of the instruction). Skipped when no
+        // controller is connected or the gamepad toggle is unbound/off.
+        std::string padMessage;
+        if (GamepadInput::IsControllerConnected() &&
+            Config::ToggleKeyGamePad != 0 && Config::ToggleModeGamePad != 3) {
+            std::string padName = GetKeyName(Config::ToggleKeyGamePad, RE::INPUT_DEVICE::kGamepad);
+            const char* verb = "Press";
+            if (Config::ToggleModeGamePad == 1) {
+                verb = "Hold";
+            } else if (Config::ToggleModeGamePad == 2) {
+                verb = "Double-press";
+            }
+            padMessage = std::format("{} [{}] on your controller", verb, padName);
+        }
+
         // Position: top-left corner with a small margin.
         auto* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(
@@ -66,6 +84,9 @@ namespace WelcomeBanner {
         if (ImGui::Begin("##F4SEMenuFrameworkBanner", nullptr, flags)) {
             ImGui::TextUnformatted("F4SE Menu Framework");
             ImGui::TextUnformatted(message.c_str());
+            if (!padMessage.empty()) {
+                ImGui::TextUnformatted(padMessage.c_str());
+            }
         }
         ImGui::End();
 

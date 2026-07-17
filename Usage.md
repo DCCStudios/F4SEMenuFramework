@@ -260,7 +260,7 @@ Data/MCM/Config/MyMod/settings.ini      ; optional defaults
 Data/MCM/Config/MyMod/keybinds.json     ; optional
 ```
 
-Players with F4SE Menu Framework see your UI under **MCM Mod Settings → \<displayName\>**.  
+Players with F4SE Menu Framework see your UI under **MCM Mod Configs (Legacy) → \<displayName\>**.  
 Players with native MCM use the classic MCM. One package serves both.
 
 Settings live in `Data/MCM/Settings/MyMod.ini` (created/updated when the user changes values). Do not put user saves only in `Config\...\settings.ini` — that file is for **defaults**.
@@ -296,7 +296,7 @@ Changing these in the UI requires a **game restart** before pages are (re)scanne
 
 When both are installed and `MCMCompatWhenNativePresent = true`:
 
-- Duplicate menus are possible (classic MCM + **MCM Mod Settings**).
+- Duplicate menus are possible (classic MCM + **MCM Mod Configs (Legacy)**).
 - Settings files are shared; the framework reloads INIs when its overlay opens.
 - Hotkey rebinds can sync with the running MCM while the pause menu movie is loaded (opening via the pause-menu **F4SE Framework** button keeps that movie under the overlay).
 

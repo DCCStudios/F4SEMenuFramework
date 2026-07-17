@@ -9,7 +9,7 @@
 namespace MCMWidgetRenderer {
 
     // Creates render functions for a parsed MCM mod config and registers them
-    // as framework section items under "MCM Mod Settings/<DisplayName>".
+    // as framework section items under "MCM Mod Configs (Legacy)/<DisplayName>".
     void RegisterMod(const MCMConfigParser::MCMModConfig& config, const std::string& modName);
 
     // Unregisters all section items for a mod (not typically needed at runtime).
@@ -36,5 +36,17 @@ namespace MCMWidgetRenderer {
 
     // Cancels an in-progress hotkey capture (gamepad B button).
     void CancelHotkeyCapture();
+
+    // True if the given render callback is one of this renderer's MCM page
+    // thunks — i.e. the currently displayed page is an MCM translated page.
+    // The main window uses this to decide whether to offer a settings search
+    // box (native pages are opaque callbacks we can't filter).
+    bool IsMCMPageFunction(void(__stdcall* fn)());
+
+    // Sets the settings-search text applied by RenderPage this frame. Pass
+    // an empty string / nullptr to disable filtering. Matching uses
+    // UI::FuzzyMatch on each control's label, help text and id; section
+    // headers stay visible when anything inside them matches.
+    void SetPageSearchFilter(const char* text);
 
 }

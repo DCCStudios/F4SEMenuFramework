@@ -248,7 +248,29 @@ void HotkeyManager::ShowConflictWarning(const std::string& hotkeyId, const std::
 void HotkeyManager::Dispatch(unsigned int scanCode) {
     for (auto& [handle, entry] : entriesByHandle) {
         if (entry.device == HotkeyDevice::Keyboard && entry.scanCode == scanCode && entry.callback) {
+            entry.isDown = true;
             entry.callback();
+        }
+    }
+}
+
+void HotkeyManager::SetReleaseCallback(const char* id, HotkeyCallback callback) {
+    if (!id) return;
+    auto itId = idToHandle.find(std::string(id));
+    if (itId != idToHandle.end()) {
+        entriesByHandle[itId->second].releaseCallback = callback;
+    }
+}
+
+void HotkeyManager::DispatchUp(unsigned int scanCode) {
+    for (auto& [handle, entry] : entriesByHandle) {
+        // Only fire key-up for entries whose down-press we actually dispatched;
+        // this also makes rebinding mid-press harmless.
+        if (entry.device == HotkeyDevice::Keyboard && entry.scanCode == scanCode && entry.isDown) {
+            entry.isDown = false;
+            if (entry.releaseCallback) {
+                entry.releaseCallback();
+            }
         }
     }
 }

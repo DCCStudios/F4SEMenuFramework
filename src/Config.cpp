@@ -4,8 +4,8 @@
 #include "Utils.h"
 unsigned int Config::ToggleKey = 0x3B;
 uint8_t Config::ToggleMode = 0;
-unsigned int Config::ToggleKeyGamePad = 0;
-uint8_t Config::ToggleModeGamePad = 0;
+unsigned int Config::ToggleKeyGamePad = 1;  // DPAD_UP (config code 1)
+uint8_t Config::ToggleModeGamePad = 1;      // HOLD
 bool Config::FreezeTimeOnMenu = true;
 int Config::MenuStyle = 0;
 std::vector<std::string> Config::MenuStyles;
@@ -33,8 +33,10 @@ void Config::Init() {
     ToggleMode = GetToggleMode(ini->GetString("ToggleMode", "SinglePress"));
     logger::info("Config: ToggleKey='{}' -> scan code 0x{:X}, ToggleMode={}", toggleKeyStr, ToggleKey, ToggleMode);
 
-    ToggleKeyGamePad = GetKeyBinding(ini->GetString("ToggleKeyGamePad", ""),RE::INPUT_DEVICE::kGamepad);
-    ToggleModeGamePad = GetToggleMode(ini->GetString("ToggleModeGamePad", "DoublePress"));
+    // Default gamepad activation: hold D-pad Up. Hold (rather than single
+    // press) so the button can keep its normal gameplay function.
+    ToggleKeyGamePad = GetKeyBinding(ini->GetString("ToggleKeyGamePad", "DPAD_UP"), RE::INPUT_DEVICE::kGamepad);
+    ToggleModeGamePad = GetToggleMode(ini->GetString("ToggleModeGamePad", "Hold"));
 
     FreezeTimeOnMenu = ini->GetBool("FreezeTimeOnMenu", true);
     BlurBackgroundOnMenu = ini->GetBool("BlurBackgroundOnMenu", true);

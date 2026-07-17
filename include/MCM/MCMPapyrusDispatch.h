@@ -38,6 +38,13 @@ namespace MCMPapyrusDispatch {
                                  const std::string& fallbackForm,
                                  const ControlValue& value);
 
+    // Deliver an MCM SendEvent keybind action: calls OnControlDown(controlId)
+    // or OnControlUp(controlId, heldSeconds) on the script attached to the
+    // given form ("Plugin.esp|HexID"), exactly like the real MCM's
+    // SendPapyrusEvent(handle, "ScriptObject", ...) input path.
+    void SendControlEvent(const std::string& formSpec, const std::string& controlId,
+                          bool down, float heldSeconds);
+
     // Returns true if an action is currently in-flight (for UI status indicator).
     bool IsActionPending();
 

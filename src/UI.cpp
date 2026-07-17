@@ -13,7 +13,13 @@
 #include "GamepadGlyphs.h"
 #include "MCM/MCMWidgetRenderer.h"
 #include "MCM/MCMConflictCheck.h"
-static ImGuiTextFilter filter;
+#include <cctype>
+
+// --- Search state ---
+// Left pane: filters the mod/page tree (recursive, fuzzy — see UI::FuzzyMatch).
+// Right pane: filters the controls of the displayed MCM translated page.
+static char s_treeSearchBuf[128] = "";
+static char s_pageSearchBuf[128] = "";
 
 // --- Gamepad pane focus state (main menu window) ---
 // 0 = mod-list tree (left pane), 1 = settings content (right pane).
@@ -36,6 +42,61 @@ static ImGuiTreeNodeFlags base_flags =
     ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_SpanAvailWidth;
 static int selection_mask = (1 << 2);
 
+// --- Fuzzy search matcher ---
+// One search token matches a text if it appears as a case-insensitive
+// substring, OR as an in-order character subsequence (characters may be
+// skipped between matches) — e.g. "fovsl" matches "FOV Slider and Player
+// Height". Subsequence matching is what makes the search forgiving of
+// abbreviations and missing spaces.
+static bool TokenMatches(std::string_view token, std::string_view text) {
+    if (token.empty()) return true;
+    auto lower = [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); };
+
+    // Substring scan
+    if (token.size() <= text.size()) {
+        for (size_t i = 0; i + token.size() <= text.size(); ++i) {
+            size_t j = 0;
+            while (j < token.size() && lower(text[i + j]) == lower(token[j])) ++j;
+            if (j == token.size()) return true;
+        }
+    }
+
+    // In-order subsequence scan
+    size_t t = 0;
+    for (size_t i = 0; i < text.size() && t < token.size(); ++i) {
+        if (lower(text[i]) == lower(token[t])) ++t;
+    }
+    return t == token.size();
+}
+
+// Whitespace-separated tokens must ALL match (in any order), so a query like
+// "fall hud" narrows to entries containing both parts.
+bool UI::FuzzyMatch(const char* needle, const char* haystack) {
+    if (!needle || !*needle) return true;  // empty search matches everything
+    if (!haystack) return false;
+    std::string_view n{needle};
+    std::string_view h{haystack};
+    size_t pos = 0;
+    while (pos < n.size()) {
+        while (pos < n.size() && std::isspace(static_cast<unsigned char>(n[pos]))) ++pos;
+        size_t end = pos;
+        while (end < n.size() && !std::isspace(static_cast<unsigned char>(n[end]))) ++end;
+        if (end > pos && !TokenMatches(n.substr(pos, end - pos), h)) return false;
+        pos = end;
+    }
+    return true;
+}
+
+// True when this node's name, or the name of ANY descendant, matches the
+// tree search. Lets a search for a nested page name keep its parents visible.
+static bool SubtreeMatches(const std::string& name, UI::MenuTree* node) {
+    if (UI::FuzzyMatch(s_treeSearchBuf, name.c_str())) return true;
+    for (auto& child : node->Children) {
+        if (SubtreeMatches(child.first, child.second)) return true;
+    }
+    return false;
+}
+
 void DummyRenderer(std::pair<const std::string, UI::MenuTree*>& node) {
     ++node_id;
     for (auto& item : node.second->Children) {
@@ -43,7 +104,32 @@ void DummyRenderer(std::pair<const std::string, UI::MenuTree*>& node) {
     }
 }
 
-void RenderNode(std::pair<const std::string, UI::MenuTree*>& node) {
+// `ancestorMatched`: an ancestor node already satisfied the search, so this
+// whole subtree is shown unfiltered (searching for a mod shows all its pages).
+void RenderNode(std::pair<const std::string, UI::MenuTree*>& node, bool ancestorMatched) {
+    const bool filterActive = s_treeSearchBuf[0] != '\0';
+
+    // Tree search: decide visibility BEFORE consuming a node id, so hidden
+    // subtrees burn exactly the same id range via DummyRenderer and ids of
+    // the remaining visible nodes stay stable.
+    bool selfMatch = true;
+    bool descendantMatch = false;
+    if (filterActive && !ancestorMatched) {
+        selfMatch = UI::FuzzyMatch(s_treeSearchBuf, node.first.c_str());
+        if (!selfMatch) {
+            for (auto& child : node.second->Children) {
+                if (SubtreeMatches(child.first, child.second)) {
+                    descendantMatch = true;
+                    break;
+                }
+            }
+            if (!descendantMatch) {
+                DummyRenderer(node);
+                return;
+            }
+        }
+    }
+
     ++node_id;
     ImGuiTreeNodeFlags node_flags = base_flags;
     // const bool is_selected = item_current_idx == i;
@@ -51,6 +137,11 @@ void RenderNode(std::pair<const std::string, UI::MenuTree*>& node) {
 
     if (node.second->Children.size() == 0) {
         node_flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+    }
+    // Auto-expand nodes that are only visible because something beneath them
+    // matches, so search results are immediately reachable.
+    if (filterActive && descendantMatch && node.second->Children.size() != 0) {
+        ImGui::SetNextItemOpen(true);
     }
     bool node_open = ImGui::TreeNodeEx((void*)(intptr_t)node_id, node_flags, node.first.c_str(), node_id);
 
@@ -67,8 +158,9 @@ void RenderNode(std::pair<const std::string, UI::MenuTree*>& node) {
         }
     }
     if (node_open && node.second->Children.size() != 0) {
+        const bool childAncestorMatched = ancestorMatched || (filterActive && selfMatch);
         for (auto& item : node.second->SortedChildren) {
-            RenderNode(item);
+            RenderNode(item, childAncestorMatched);
         }
         ImGui::TreePop();
     } else {
@@ -153,9 +245,11 @@ void __stdcall UI::RenderMenuWindow() {
 
 
 
-    // Filter section
+    // Filter section (searches the whole tree — mod groups AND nested pages)
     ImGui::BeginChild("TreeView2", ImVec2(ImGui::GetContentRegionAvail().x * 0.3f, filterHeight), ImGuiChildFlags_None);
-    filter.Draw("##F4SEModControlPanelMenuFilter", -FLT_MIN);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##F4SEModControlPanelMenuFilter",
+                             Translations::Get("Search.Mods"), s_treeSearchBuf, sizeof(s_treeSearchBuf));
     ImGui::EndChild();
 
     ImGui::SameLine();
@@ -197,10 +291,37 @@ void __stdcall UI::RenderMenuWindow() {
 
     // Name of the translated-MCM top-level group. Pinned to the top of the tree
     // (see below) and given a distinct accent + larger header.
-    static constexpr const char* kMCMGroup = "MCM Mod Settings";
+    static constexpr const char* kMCMGroup = "MCM Mod Configs (Legacy)";
 
     // Renders a single top-level tree group (its CollapsingHeader + children).
     auto renderTopLevelGroup = [&](const std::pair<const std::string, UI::MenuTree*>& item) {
+        const bool filterActive = s_treeSearchBuf[0] != '\0';
+
+        // Tree search: a group stays visible when its own name matches OR
+        // anything nested under it matches (the old code only tested the
+        // group name itself, which hid every MCM mod under "MCM Mod Configs
+        // (Legacy)" the moment you typed a mod name). Hidden groups still
+        // burn their id range so visible node ids stay stable.
+        bool groupSelfMatch = true;
+        bool groupDescendantMatch = false;
+        if (filterActive) {
+            groupSelfMatch = UI::FuzzyMatch(s_treeSearchBuf, item.first.c_str());
+            if (!groupSelfMatch) {
+                for (auto& child : item.second->Children) {
+                    if (SubtreeMatches(child.first, child.second)) {
+                        groupDescendantMatch = true;
+                        break;
+                    }
+                }
+                if (!groupDescendantMatch) {
+                    for (auto& child : item.second->Children) {
+                        DummyRenderer(child);
+                    }
+                    return;
+                }
+            }
+        }
+
         // Translated MCM menus get a distinct accent so users can tell them
         // apart from native F4SE pages. The accent is derived from the active
         // theme's text color (blended toward amber) so it stays readable and
@@ -221,8 +342,12 @@ void __stdcall UI::RenderMenuWindow() {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f, 9.0f));
             ImGui::SetWindowFontScale(1.25f);
         }
+        // Auto-expand groups that are visible because of a nested match so
+        // the results are on screen without extra clicks.
+        if (filterActive && groupDescendantMatch) {
+            ImGui::SetNextItemOpen(true);
+        }
         const bool headerOpen =
-            filter.PassFilter(item.first.c_str()) &&
             ImGui::CollapsingHeader(std::format("{}##{}", item.first, node_id).c_str());
         if (isMCMGroup) {
             ImGui::SetWindowFontScale(1.0f);
@@ -231,8 +356,10 @@ void __stdcall UI::RenderMenuWindow() {
         }
 
         if (headerOpen) {
+            // A group whose own name matched shows all children unfiltered.
+            const bool childAncestorMatched = filterActive && groupSelfMatch;
             for (auto node : item.second->SortedChildren) {
-                RenderNode(node);
+                RenderNode(node, childAncestorMatched);
             }
         } else {
             for (auto node : item.second->Children) {
@@ -241,7 +368,7 @@ void __stdcall UI::RenderMenuWindow() {
         }
     };
 
-    // Pin the translated "MCM Mod Settings" group to the very top of the list,
+    // Pin the translated "MCM Mod Configs (Legacy)" group to the very top of the list,
     // ahead of the alphabetically-ordered native pages. RootMenu->Children is a
     // std::map (alphabetical), so render the MCM group explicitly first, then
     // everything else while skipping it.
@@ -275,6 +402,29 @@ void __stdcall UI::RenderMenuWindow() {
     }
 
     if (display_node) {
+        // Reset the page search whenever the displayed page changes — a
+        // filter typed for one mod's settings shouldn't silently blank the
+        // next page the user opens.
+        static UI::MenuTree* s_lastDisplayNode = nullptr;
+        if (display_node != s_lastDisplayNode) {
+            s_lastDisplayNode = display_node;
+            s_pageSearchBuf[0] = '\0';
+        }
+
+        // Settings search — only offered for MCM translated pages, where we
+        // render every control ourselves and can filter them. Native pages
+        // are opaque render callbacks from other plugins.
+        if (display_node->Render && MCMWidgetRenderer::IsMCMPageFunction(display_node->Render)) {
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::InputTextWithHint("##F4SEModControlPanelPageFilter",
+                                     Translations::Get("Search.Settings"),
+                                     s_pageSearchBuf, sizeof(s_pageSearchBuf));
+            ImGui::Separator();
+            MCMWidgetRenderer::SetPageSearchFilter(s_pageSearchBuf);
+        } else {
+            MCMWidgetRenderer::SetPageSearchFilter("");
+        }
+
         display_node->Render();
     }
     ImGui::EndChild();
@@ -653,7 +803,7 @@ void UI::RenderConfigWindow() {
                                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
             ImGui::TextWrapped("The MCM compatibility layer scans and translates MCM mod configs during game startup.");
             ImGui::Spacing();
-            ImGui::TextWrapped("Restart the game for the MCM Mod Settings pages to appear.");
+            ImGui::TextWrapped("Restart the game for the MCM Mod Configs (Legacy) pages to appear.");
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
@@ -668,12 +818,12 @@ void UI::RenderConfigWindow() {
         // Only meaningful when the real MCM plugin is loaded alongside us —
         // by default our translation layer silently steps aside in that case.
         if (MCMConflictCheck::IsNativeMCMPresent()) {
-            if (ToggleButton("Load MCM Mod Settings Even With MCM Installed", &Config::MCMCompatWhenNativePresent)) {
+            if (ToggleButton("Load MCM Mod Configs (Legacy) Even With MCM Installed", &Config::MCMCompatWhenNativePresent)) {
                 Config::Save();
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("The original MCM plugin is installed. By default this framework\n"
-                                  "hides its own MCM Mod Settings pages to avoid conflicts. Enable to\n"
+                                  "hides its own MCM Mod Configs (Legacy) pages to avoid conflicts. Enable to\n"
                                   "show them anyway (both write the same setting files).\n"
                                   "Requires game restart to take effect.");
             }

@@ -22,11 +22,13 @@ class HotkeyManager {
 public:
     struct HotkeyEntry {
         std::string id;
-        unsigned int scanCode;        // current binding (DIK scan code or gamepad config code)
-        unsigned int defaultScanCode; // original default for reset
-        HotkeyCallback callback;
-        int64_t handle;
-        HotkeyDevice device;          // which input device this binding uses
+        unsigned int scanCode = 0;        // current binding (DIK scan code or gamepad config code)
+        unsigned int defaultScanCode = 0; // original default for reset
+        HotkeyCallback callback = nullptr;
+        HotkeyCallback releaseCallback = nullptr; // optional key-up callback (keyboard only)
+        bool isDown = false;              // down was dispatched, awaiting matching up
+        int64_t handle = -1;
+        HotkeyDevice device = HotkeyDevice::Keyboard; // which input device this binding uses
     };
 
     // Register a keyboard hotkey. If the INI already has a persisted binding for this id,
@@ -56,8 +58,18 @@ public:
     // conflicts before calling SetBinding.
     static std::vector<std::string> GetConflicts(unsigned int scanCode, const char* excludeId);
 
+    // Attach a key-up callback to an already-registered keyboard hotkey.
+    // Needed by MCM SendEvent keybinds, which deliver both OnControlDown and
+    // OnControlUp Papyrus events. Fired from WndProc on WM_KEYUP.
+    static void SetReleaseCallback(const char* id, HotkeyCallback callback);
+
     // Called from WndProc on WM_KEYDOWN first-press when no blocking window is open.
     static void Dispatch(unsigned int scanCode);
+
+    // Called from WndProc on WM_KEYUP. Fires releaseCallback for entries whose
+    // down-press we previously dispatched (so a press consumed by a blocking
+    // window never produces an orphaned key-up event).
+    static void DispatchUp(unsigned int scanCode);
 
     // Called from GamepadInput::Poll() when digital buttons have rising edges.
     // buttonMask is the XInput bitmask of newly-pressed buttons.

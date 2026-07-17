@@ -4,6 +4,7 @@
 #include "HotkeyManager.h"
 #include "Application.h"
 
+#include <chrono>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -17,20 +18,44 @@ namespace MCMKeybindTranslator {
     static std::string s_actionTable[MAX_KEYBINDS];
     static std::optional<MCMConfigParser::MCMAction> s_actionObjTable[MAX_KEYBINDS];
     static std::string s_modNameTable[MAX_KEYBINDS];
+    static std::string s_keybindIdTable[MAX_KEYBINDS];   // MCM keybind id (SendEvent control name)
+    static std::chrono::steady_clock::time_point s_pressTimeTable[MAX_KEYBINDS];  // for OnControlUp held duration
     static size_t s_nextSlot = 0;
 
     // Template thunk generator — dispatches the action for a given slot.
     // Structured (object-form) actions take priority since they preserve the
     // target form and typed params; legacy string actions are the fallback.
+    // SendEvent actions deliver OnControlDown here and OnControlUp from the
+    // matching release thunk, mirroring the real MCM's input handler.
     template <size_t N>
     static void __stdcall KeybindThunk() {
         if constexpr (N < MAX_KEYBINDS) {
             if (s_actionObjTable[N].has_value()) {
-                MCMPapyrusDispatch::ExecuteStructuredAction(
-                    *s_actionObjTable[N], s_modNameTable[N], "",
-                    MCMPapyrusDispatch::ControlValue{});  // no control value for keybinds
+                if (s_actionObjTable[N]->type == "SendEvent") {
+                    s_pressTimeTable[N] = std::chrono::steady_clock::now();
+                    MCMPapyrusDispatch::SendControlEvent(
+                        s_actionObjTable[N]->form, s_keybindIdTable[N], /*down=*/true, 0.0f);
+                } else {
+                    MCMPapyrusDispatch::ExecuteStructuredAction(
+                        *s_actionObjTable[N], s_modNameTable[N], "",
+                        MCMPapyrusDispatch::ControlValue{});  // no control value for keybinds
+                }
             } else if (!s_actionTable[N].empty()) {
                 MCMPapyrusDispatch::ExecuteAction(s_actionTable[N], s_modNameTable[N]);
+            }
+        }
+    }
+
+    // Release thunk — only wired up for SendEvent keybinds. OnControlUp's
+    // second argument is the held duration in seconds (matches real MCM).
+    template <size_t N>
+    static void __stdcall KeybindUpThunk() {
+        if constexpr (N < MAX_KEYBINDS) {
+            if (s_actionObjTable[N].has_value() && s_actionObjTable[N]->type == "SendEvent") {
+                const float held = std::chrono::duration<float>(
+                    std::chrono::steady_clock::now() - s_pressTimeTable[N]).count();
+                MCMPapyrusDispatch::SendControlEvent(
+                    s_actionObjTable[N]->form, s_keybindIdTable[N], /*down=*/false, held);
             }
         }
     }
@@ -56,6 +81,24 @@ namespace MCMKeybindTranslator {
         &KeybindThunk<56>, &KeybindThunk<57>, &KeybindThunk<58>, &KeybindThunk<59>,
         &KeybindThunk<60>, &KeybindThunk<61>, &KeybindThunk<62>, &KeybindThunk<63>,
     };
+    static ThunkFn s_upThunkTable[] = {
+        &KeybindUpThunk<0>,  &KeybindUpThunk<1>,  &KeybindUpThunk<2>,  &KeybindUpThunk<3>,
+        &KeybindUpThunk<4>,  &KeybindUpThunk<5>,  &KeybindUpThunk<6>,  &KeybindUpThunk<7>,
+        &KeybindUpThunk<8>,  &KeybindUpThunk<9>,  &KeybindUpThunk<10>, &KeybindUpThunk<11>,
+        &KeybindUpThunk<12>, &KeybindUpThunk<13>, &KeybindUpThunk<14>, &KeybindUpThunk<15>,
+        &KeybindUpThunk<16>, &KeybindUpThunk<17>, &KeybindUpThunk<18>, &KeybindUpThunk<19>,
+        &KeybindUpThunk<20>, &KeybindUpThunk<21>, &KeybindUpThunk<22>, &KeybindUpThunk<23>,
+        &KeybindUpThunk<24>, &KeybindUpThunk<25>, &KeybindUpThunk<26>, &KeybindUpThunk<27>,
+        &KeybindUpThunk<28>, &KeybindUpThunk<29>, &KeybindUpThunk<30>, &KeybindUpThunk<31>,
+        &KeybindUpThunk<32>, &KeybindUpThunk<33>, &KeybindUpThunk<34>, &KeybindUpThunk<35>,
+        &KeybindUpThunk<36>, &KeybindUpThunk<37>, &KeybindUpThunk<38>, &KeybindUpThunk<39>,
+        &KeybindUpThunk<40>, &KeybindUpThunk<41>, &KeybindUpThunk<42>, &KeybindUpThunk<43>,
+        &KeybindUpThunk<44>, &KeybindUpThunk<45>, &KeybindUpThunk<46>, &KeybindUpThunk<47>,
+        &KeybindUpThunk<48>, &KeybindUpThunk<49>, &KeybindUpThunk<50>, &KeybindUpThunk<51>,
+        &KeybindUpThunk<52>, &KeybindUpThunk<53>, &KeybindUpThunk<54>, &KeybindUpThunk<55>,
+        &KeybindUpThunk<56>, &KeybindUpThunk<57>, &KeybindUpThunk<58>, &KeybindUpThunk<59>,
+        &KeybindUpThunk<60>, &KeybindUpThunk<61>, &KeybindUpThunk<62>, &KeybindUpThunk<63>,
+    };
 
     void RegisterFromFile(const std::filesystem::path& keybindsPath, const std::string& modName) {
         std::ifstream file(keybindsPath);
@@ -66,7 +109,9 @@ namespace MCMKeybindTranslator {
 
         nlohmann::json root;
         try {
-            file >> root;
+            // ignore_comments: real MCM reads these with JsonCpp, which accepts
+            // // comments — mod-shipped keybinds.json files may contain them.
+            root = nlohmann::json::parse(file, nullptr, true, /*ignore_comments=*/true);
         } catch (const nlohmann::json::parse_error& e) {
             logger::error("[MCMKeybindTranslator] Parse error in '{}': {}", keybindsPath.string(), e.what());
             return;
@@ -111,10 +156,12 @@ namespace MCMKeybindTranslator {
 
             if (kb.id.empty()) continue;
             if (kb.action.empty() && !kb.actionObj.has_value()) {
-                // Action types we can't dispatch yet (e.g. SendEvent) still get
-                // registered so the binding is visible and rebindable — the
-                // real MCM would show them too. The thunk just logs.
-                logger::warn("[MCMKeybindTranslator] Keybind '{}' of '{}' has an unsupported action — registering display-only",
+                // All four real-MCM action types (CallFunction, CallGlobalFunction,
+                // RunConsoleCommand, SendEvent) are dispatchable; anything that
+                // still fails ParseAction is malformed or unknown. Register it
+                // anyway so the binding is visible and rebindable — the real MCM
+                // would show it too. The thunk just does nothing.
+                logger::warn("[MCMKeybindTranslator] Keybind '{}' of '{}' has an unrecognized/invalid action — registering display-only",
                     kb.id, modName);
             }
 
@@ -126,8 +173,15 @@ namespace MCMKeybindTranslator {
             s_actionTable[slot] = kb.action;
             s_actionObjTable[slot] = kb.actionObj;
             s_modNameTable[slot] = modName;
+            s_keybindIdTable[slot] = kb.id;
 
             kb.hotkeyHandle = HotkeyManager::Register(hotkeyId.c_str(), kb.defaultKey, s_thunkTable[slot]);
+
+            // SendEvent keybinds also need OnControlUp with the held duration —
+            // wire the matching key-up thunk (dispatched from WM_KEYUP).
+            if (kb.actionObj.has_value() && kb.actionObj->type == "SendEvent") {
+                HotkeyManager::SetReleaseCallback(hotkeyId.c_str(), s_upThunkTable[slot]);
+            }
 
             // Route framework-side binding changes back to MCM's Keybinds.json,
             // then import the user's saved MCM binding (that file is the source

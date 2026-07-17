@@ -863,7 +863,7 @@ Copy-paste tables and more examples: [Usage.md — Plugin Hotkey API](Usage.md#p
 
 ## 11. MCM Translation Layer
 
-The framework can host existing **Mod Configuration Menu** packages as ImGui pages under **MCM Mod Settings**, and optionally provide the MCM Papyrus natives when `mcm.dll` is not present.
+The framework can host existing **Mod Configuration Menu** packages as ImGui pages under **MCM Mod Configs (Legacy)**, and optionally provide the MCM Papyrus natives when `mcm.dll` is not present.
 
 ### Who needs to read this?
 

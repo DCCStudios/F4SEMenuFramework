@@ -11,5 +11,8 @@
   "Settings.ToggleMode.Keyboard": "Toggle Mode (Keyboard):",
   "Settings.ToggleKey.Keyboard": "Toggle Key (Keyboard):",
   "Settings.ToggleMode.Gamepad": "Toggle Mode (Gamepad):",
-  "Settings.ToggleKey.Gamepad": "Toggle Key (Gamepad):"
+  "Settings.ToggleKey.Gamepad": "Toggle Key (Gamepad):",
+
+  "Search.Mods": "Search mods & pages...",
+  "Search.Settings": "Search settings..."
 }

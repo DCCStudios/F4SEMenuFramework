@@ -216,6 +216,25 @@ namespace MCMPapyrusDispatch {
                                  const std::string& modName,
                                  const std::string& fallbackForm,
                                  const ControlValue& value) {
+        // Console commands need no VM or parameter packing. The real MCM runs
+        // them synchronously from its input handler; we're called from the
+        // window-message thread (keybinds) or render thread (buttons), so run
+        // the command on the game's main thread via the F4SE task queue.
+        if (action.type == "RunConsoleCommand") {
+            if (action.command.empty()) {
+                logger::warn("[MCMPapyrusDispatch] RunConsoleCommand with empty command (mod: {})", modName);
+                return;
+            }
+            if (const auto* tasks = F4SE::GetTaskInterface()) {
+                const std::string cmd = action.command;
+                tasks->AddTask([cmd]() { RE::Console::ExecuteCommand(cmd.c_str()); });
+                logger::info("[MCMPapyrusDispatch] Queued console command '{}' (mod: {})", cmd, modName);
+                s_statusText = "Console: " + cmd;
+                s_lastActionTime = std::chrono::steady_clock::now();
+            }
+            return;
+        }
+
         auto* gameVM = RE::GameVM::GetSingleton();
         if (!gameVM || !gameVM->GetVM()) {
             logger::warn("[MCMPapyrusDispatch] Papyrus VM unavailable for structured action (mod: {})", modName);
@@ -267,29 +286,35 @@ namespace MCMPapyrusDispatch {
                 return;
             }
 
-            // If the config names the script, dispatch directly to it. Otherwise
-            // find the first script object bound to the form (MCM allows omitting
-            // scriptName when only one script is attached).
-            std::string scriptName = action.scriptName;
-            if (scriptName.empty()) {
-                struct FirstScriptFinder {
-                    std::string found;
-                };
-                // ForEachBoundObject requires a game-allocated functor; instead we
-                // probe FindBoundObject with an empty name is not possible, so we
-                // simply fail gracefully and require the scriptName field.
-                logger::warn("[MCMPapyrusDispatch] Structured CallFunction on form 0x{:X} has no scriptName — "
-                    "MCM configs should specify scriptName when multiple scripts are attached; skipping (mod: {})",
-                    form->GetFormID(), modName);
-                handlePolicy.ReleaseHandle(handle);
-                s_statusText = action.function + " (no scriptName)";
-                return;
+            // If the config names the script, dispatch directly to it. When it
+            // doesn't (the common case — MCM keybinds.json has no scriptName
+            // field at all, and most config.json actions omit it too), mirror
+            // the real MCM: its VMScript helper defaults the class name to
+            // "ScriptObject", which every Papyrus script derives from, so the
+            // VM's non-exact lookup returns the form's attached script and the
+            // function is resolved on that object's actual type.
+            if (!action.scriptName.empty()) {
+                success = vm->DispatchMethodCall(handle,
+                    RE::BSFixedString(action.scriptName.c_str()),
+                    RE::BSFixedString(action.function.c_str()),
+                    scrapFunc, nullCallback);
+            } else {
+                // Resolve the bound object explicitly (exactMatch=false casts
+                // any attached script to ScriptObject), then dispatch on the
+                // object so the function lookup uses its real script type.
+                RE::BSTSmartPointer<RE::BSScript::Object> scriptObj;
+                if (vm->FindBoundObject(handle, "ScriptObject", false, scriptObj, false) && scriptObj) {
+                    success = vm->DispatchMethodCall(scriptObj,
+                        RE::BSFixedString(action.function.c_str()),
+                        scrapFunc, nullCallback);
+                } else {
+                    logger::warn("[MCMPapyrusDispatch] Structured CallFunction: no script bound to form 0x{:X} (mod: {})",
+                        form->GetFormID(), modName);
+                    handlePolicy.ReleaseHandle(handle);
+                    s_statusText = action.function + " (no scripts)";
+                    return;
+                }
             }
-
-            success = vm->DispatchMethodCall(handle,
-                RE::BSFixedString(scriptName.c_str()),
-                RE::BSFixedString(action.function.c_str()),
-                scrapFunc, nullCallback);
             handlePolicy.ReleaseHandle(handle);
         } else {
             logger::warn("[MCMPapyrusDispatch] Unknown structured action type '{}' (mod: {})", action.type, modName);
@@ -305,6 +330,57 @@ namespace MCMPapyrusDispatch {
             logger::warn("[MCMPapyrusDispatch] Structured action {}.{} dispatch FAILED (mod: {})",
                 action.scriptName, action.function, modName);
             s_statusText = action.function + " (failed)";
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // SendEvent keybind actions (OnControlDown / OnControlUp)
+    // ------------------------------------------------------------------
+
+    void SendControlEvent(const std::string& formSpec, const std::string& controlId,
+                          bool down, float heldSeconds) {
+        auto* gameVM = RE::GameVM::GetSingleton();
+        if (!gameVM || !gameVM->GetVM()) return;
+        auto* vm = gameVM->GetVM().get();
+
+        auto* form = ResolveFormFromSource(formSpec);
+        if (!form) {
+            logger::warn("[MCMPapyrusDispatch] SendEvent: form '{}' not resolvable", formSpec);
+            return;
+        }
+
+        auto& handlePolicy = vm->GetObjectHandlePolicy();
+        auto handle = handlePolicy.GetHandleForObject(
+            static_cast<std::uint32_t>(form->GetFormType()), form);
+        if (handle == handlePolicy.EmptyHandle()) return;
+
+        // The real MCM delivers these through SendPapyrusEvent(handle,
+        // "ScriptObject", "OnControlDown"/"OnControlUp", ...), i.e. a method
+        // call on the form's attached script resolved via the ScriptObject
+        // base class. OnControlDown(controlName); OnControlUp(controlName,
+        // heldSeconds). The receiving script must sit on the form itself
+        // (quests, not aliases) — same requirement as the real MCM.
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> nullCallback;
+        bool ok = false;
+        RE::BSTSmartPointer<RE::BSScript::Object> scriptObj;
+        if (vm->FindBoundObject(handle, "ScriptObject", false, scriptObj, false) && scriptObj) {
+            if (down) {
+                auto scrapFunc = (PapyrusFunctionArgs::FunctionArgs<RE::BSFixedString>{
+                    vm, RE::BSFixedString(controlId.c_str()) }).get();
+                ok = vm->DispatchMethodCall(scriptObj, RE::BSFixedString("OnControlDown"),
+                                            scrapFunc, nullCallback);
+            } else {
+                auto scrapFunc = (PapyrusFunctionArgs::FunctionArgs<RE::BSFixedString, float>{
+                    vm, RE::BSFixedString(controlId.c_str()), heldSeconds }).get();
+                ok = vm->DispatchMethodCall(scriptObj, RE::BSFixedString("OnControlUp"),
+                                            scrapFunc, nullCallback);
+            }
+        }
+        handlePolicy.ReleaseHandle(handle);
+
+        if (!ok) {
+            logger::debug("[MCMPapyrusDispatch] SendEvent {} for '{}' on {} not handled (script may not implement it)",
+                down ? "OnControlDown" : "OnControlUp", controlId, formSpec);
         }
     }
 

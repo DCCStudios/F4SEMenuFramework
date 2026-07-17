@@ -370,6 +370,12 @@ LRESULT Hooks::WndProcHook::thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         if (scanCode == Config::ToggleKey) {
             holdKeyDown = false;
         }
+        // Key-up counterpart of the hotkey dispatch above — needed by MCM
+        // SendEvent keybinds (OnControlUp carries the held duration). Always
+        // delivered so a press started in gameplay can't leave a hotkey stuck
+        // "down" if a menu opened before release; DispatchUp itself only fires
+        // for entries whose down-press was actually dispatched.
+        HotkeyManager::DispatchUp(scanCode);
     }
 
     // --- Forward to ImGui and block game input when menu is active ---

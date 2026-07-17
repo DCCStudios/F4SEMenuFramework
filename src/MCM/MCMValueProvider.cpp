@@ -1,5 +1,6 @@
 #include "MCM/MCMValueProvider.h"
 #include "MCM/MCMScanner.h"
+#include "MCM/MCMConflictCheck.h"
 #include "MCM/PapyrusFunctionArgs.h"
 #include <fstream>
 #include <sstream>
@@ -213,21 +214,90 @@ namespace MCMValueProvider {
         return result;
     }
 
-    static ProviderStatus SetModSetting(const std::string& modName, const MCMConfigParser::ValueSource& source, const std::string& value) {
-        std::lock_guard lock(s_mutex);
-
-        auto* ini = EnsureModLoaded(modName);
-
-        std::string section = "Main";
-        std::string key = source.settingName;
-        auto colonPos = key.find(':');
-        if (colonPos != std::string::npos) {
-            section = key.substr(colonPos + 1);
-            key = key.substr(0, colonPos);
+    // Mirror a ModSetting write into the REAL MCM's in-memory SettingStore.
+    //
+    // The real mcm.dll loads every settings INI into memory ONCE at startup;
+    // all its Papyrus natives (MCM.GetModSettingX) and its Scaleform pipeline
+    // read from that store, never from disk again. So when it is present,
+    // writing the INI file alone leaves running mods reading STALE values —
+    // FOV Slider's holotape/Papyrus reads, the FallUI suite's HUD/inventory
+    // scripts, etc. all kept seeing the old numbers until the next launch.
+    //
+    // Fix: dispatch a static call to the real MCM's own Papyrus natives
+    // (MCM.SetModSettingInt/Bool/Float/String — verified against f4mcm's
+    // PapyrusMCM.cpp). Those update the live store AND commit the same value
+    // to the same flat INI we write, so memory and disk stay in agreement.
+    // No-ops harmlessly when the setting isn't in MCM's store.
+    static void MirrorToNativeMCM(const std::string& modName,
+                                  const MCMConfigParser::ValueSource& source,
+                                  const std::string& value) {
+        if (!MCMConflictCheck::IsNativeMCMPresent()) {
+            return;
         }
 
-        ini->SetValue(section.c_str(), key.c_str(), value.c_str());
-        s_dirtyMods.insert(modName);  // only dirty mods are ever flushed to disk
+        const auto mod = RE::BSFixedString(modName.c_str());
+        const auto setting = RE::BSFixedString(source.settingName.c_str());
+        bool dispatched = false;
+
+        switch (source.type) {
+            case MCMConfigParser::SourceType::ModSettingBool: {
+                const bool b = (value == "1" || value == "true" || value == "True");
+                dispatched = PapyrusFunctionArgs::CallGlobalFunctionWithArgs(
+                    "MCM", "SetModSettingBool", mod, setting, b);
+                break;
+            }
+            case MCMConfigParser::SourceType::ModSettingInt: {
+                std::int32_t i = 0;
+                try { i = std::stoi(value); } catch (...) {}
+                dispatched = PapyrusFunctionArgs::CallGlobalFunctionWithArgs(
+                    "MCM", "SetModSettingInt", mod, setting, i);
+                break;
+            }
+            case MCMConfigParser::SourceType::ModSettingFloat: {
+                float f = 0.0f;
+                try { f = std::stof(value); } catch (...) {}
+                dispatched = PapyrusFunctionArgs::CallGlobalFunctionWithArgs(
+                    "MCM", "SetModSettingFloat", mod, setting, f);
+                break;
+            }
+            case MCMConfigParser::SourceType::ModSettingString:
+                dispatched = PapyrusFunctionArgs::CallGlobalFunctionWithArgs(
+                    "MCM", "SetModSettingString", mod, setting, RE::BSFixedString(value.c_str()));
+                break;
+            default:
+                return;
+        }
+
+        if (dispatched) {
+            logger::debug("[MCMValueProvider] Mirrored '{}' of '{}' = '{}' into native MCM's live store",
+                source.settingName, modName, value);
+        } else {
+            logger::warn("[MCMValueProvider] Failed to mirror '{}' of '{}' into native MCM (VM dispatch failed)",
+                source.settingName, modName);
+        }
+    }
+
+    static ProviderStatus SetModSetting(const std::string& modName, const MCMConfigParser::ValueSource& source, const std::string& value) {
+        {
+            std::lock_guard lock(s_mutex);
+
+            auto* ini = EnsureModLoaded(modName);
+
+            std::string section = "Main";
+            std::string key = source.settingName;
+            auto colonPos = key.find(':');
+            if (colonPos != std::string::npos) {
+                section = key.substr(colonPos + 1);
+                key = key.substr(0, colonPos);
+            }
+
+            ini->SetValue(section.c_str(), key.c_str(), value.c_str());
+            s_dirtyMods.insert(modName);  // only dirty mods are ever flushed to disk
+        }
+
+        // Outside the lock: keep the real MCM's live in-memory store in step
+        // (Papyrus dispatch must not run under our INI mutex).
+        MirrorToNativeMCM(modName, source, value);
         return ProviderStatus::Available;
     }
 

@@ -69,6 +69,16 @@ namespace GamepadInput {
 
     static std::atomic<bool> s_suppressing{ false };
 
+    // Release-linger per XInput user index. The button that CLOSES a
+    // framework window (B / the toggle button) is physically still held on
+    // the very next game poll — with suppression already off, the game would
+    // see it as a fresh press and act on it (B opened the Pip-Boy right
+    // after dismissing the menu). So after a window closes, keep hiding
+    // buttons and triggers from the game until that controller reports a
+    // fully released state once. Sticks intentionally pass through during
+    // the linger so movement resumes instantly.
+    static std::atomic<bool> s_lingerSuppress[4] = {};
+
     // Shared suppression logic used by all per-DLL hook functions. Forwards to
     // the DLL's real export and zeroes the returned data while a framework
     // window is open, preserving the real connected/disconnected result code.
@@ -79,9 +89,11 @@ namespace GamepadInput {
         }
 
         DWORD result = real(dwUserIndex, pState);
+        const size_t lingerIdx = (dwUserIndex < 4) ? dwUserIndex : 0;
 
         if (WindowManager::IsAnyWindowOpen()) {
             s_suppressing.store(true, std::memory_order_relaxed);
+            s_lingerSuppress[lingerIdx].store(true, std::memory_order_relaxed);
             // Keep the connection status but hide all buttons/sticks/triggers
             // from the caller (game engine, other plugins).
             if (result == ERROR_SUCCESS && pState) {
@@ -91,6 +103,27 @@ namespace GamepadInput {
             }
         } else {
             s_suppressing.store(false, std::memory_order_relaxed);
+            if (s_lingerSuppress[lingerIdx].load(std::memory_order_relaxed)) {
+                if (result == ERROR_SUCCESS && pState) {
+                    const bool anyHeld =
+                        pState->Gamepad.wButtons != 0 ||
+                        pState->Gamepad.bLeftTrigger >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD ||
+                        pState->Gamepad.bRightTrigger >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+                    if (anyHeld) {
+                        // Still holding the press that closed the window —
+                        // hide buttons/triggers, let sticks through.
+                        pState->Gamepad.wButtons = 0;
+                        pState->Gamepad.bLeftTrigger = 0;
+                        pState->Gamepad.bRightTrigger = 0;
+                    } else {
+                        // Fully released once — normal input from here on.
+                        s_lingerSuppress[lingerIdx].store(false, std::memory_order_relaxed);
+                    }
+                } else {
+                    // Controller disconnected — nothing can leak.
+                    s_lingerSuppress[lingerIdx].store(false, std::memory_order_relaxed);
+                }
+            }
         }
         return result;
     }

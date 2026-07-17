@@ -48,8 +48,8 @@ Requires **F4SE** and **Address Library for F4SE Plugins** matching your game ve
 
 If you have mods that ship `Data\MCM\Config\<ModName>\config.json`:
 
-- With **only** this framework (no `mcm.dll`): their settings appear under **MCM Mod Settings** in the Mod Control Panel, and Papyrus `MCM.GetModSetting*` / `SetModSetting*` keep working if you also ship the stub `MCM.pex` from this project’s `public\Scripts\` folder.
-- With **native MCM** (`mcm.dll`) installed: by default the framework **does not** show duplicate MCM pages (native MCM stays authoritative). You can force coexistence in the framework Settings → **Load MCM Mod Settings Even With MCM Installed** (requires restart).
+- With **only** this framework (no `mcm.dll`): their settings appear under **MCM Mod Configs (Legacy)** in the Mod Control Panel, and Papyrus `MCM.GetModSetting*` / `SetModSetting*` keep working if you also ship the stub `MCM.pex` from this project’s `public\Scripts\` folder.
+- With **native MCM** (`mcm.dll`) installed: by default the framework **does not** show duplicate MCM pages (native MCM stays authoritative). You can force coexistence in the framework Settings → **Load MCM Mod Configs (Legacy) Even With MCM Installed** (requires restart).
 
 See [CHANGELOG.md](CHANGELOG.md) for 3.1 details (live hotkey sync, settings safety fixes, gamepad UX).
 
@@ -111,7 +111,7 @@ Details, DIK table, and conflict behavior: [Usage.md — Plugin Hotkey API](Usag
 At game data ready, the framework can:
 
 1. Scan `Data\MCM\Config\*\config.json` (and related `settings.ini` / `keybinds.json`).
-2. Build ImGui pages under **MCM Mod Settings**.
+2. Build ImGui pages under **MCM Mod Configs (Legacy)**.
 3. Read/write `Data\MCM\Settings\<ModName>.ini` (same files native MCM uses).
 4. If **`mcm.dll` is not loaded**, register the standard **MCM** Papyrus natives so scripts keep working.
 5. Optionally coexist with native MCM (settings/hotkey two-way sync when enabled).
@@ -126,7 +126,7 @@ Data/MCM/Config/MyMod/settings.ini      (optional defaults)
 Data/MCM/Config/MyMod/keybinds.json     (optional)
 ```
 
-Players with this framework see your menu under **MCM Mod Settings**. Players with native MCM use the classic MCM UI. You do not need a separate “framework” config format.
+Players with this framework see your menu under **MCM Mod Configs (Legacy)**. Players with native MCM use the classic MCM UI. You do not need a separate “framework” config format.
 
 Papyrus continues to use the usual API (`MCM.GetModSettingFloat`, `SetModSettingBool`, `RegisterForExternalEvent("OnMCMSettingChange|MyMod", ...)`, etc.). Stub sources live in `public/Scripts/`.
 

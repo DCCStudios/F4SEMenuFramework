@@ -101,6 +101,7 @@ namespace MCMConfigParser {
             action.scriptName = act["script"].get<std::string>();
         }
         if (act.contains("function") && act["function"].is_string()) action.function = act["function"].get<std::string>();
+        if (act.contains("command") && act["command"].is_string()) action.command = act["command"].get<std::string>();
 
         if (act.contains("params") && act["params"].is_array()) {
             for (const auto& p : act["params"]) {
@@ -108,7 +109,21 @@ namespace MCMConfigParser {
             }
         }
 
-        if (action.type.empty() || action.function.empty()) return std::nullopt;
+        // Per-type validation, matching what the real MCM's keybind/action
+        // executor actually requires:
+        //  - CallFunction:       form + function (scriptName optional — MCM
+        //                        defaults to ScriptObject when omitted)
+        //  - CallGlobalFunction: script + function
+        //  - RunConsoleCommand:  command
+        //  - SendEvent:          form (OnControlDown/Up delivered to its script)
+        if (action.type.empty()) return std::nullopt;
+        if (action.type == "RunConsoleCommand") {
+            if (action.command.empty()) return std::nullopt;
+        } else if (action.type == "SendEvent") {
+            if (action.form.empty()) return std::nullopt;
+        } else if (action.function.empty()) {
+            return std::nullopt;
+        }
         return action;
     }
 
@@ -341,7 +356,11 @@ namespace MCMConfigParser {
 
         json root;
         try {
-            file >> root;
+            // ignore_comments=true: real MCM parses configs with JsonCpp, whose
+            // default reader accepts // and /* */ comments — and shipped mods
+            // rely on that (Jump Grunt, Elzee Recoil Shake annotate every key).
+            // Strict parsing made those configs fail entirely.
+            root = json::parse(file, nullptr, /*allow_exceptions=*/true, /*ignore_comments=*/true);
         } catch (const json::parse_error& e) {
             logger::error("[MCMConfigParser] JSON parse error in '{}': {}", configPath.string(), e.what());
             return std::nullopt;
