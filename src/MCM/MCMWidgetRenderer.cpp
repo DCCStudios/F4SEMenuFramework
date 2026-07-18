@@ -7,6 +7,8 @@
 #include "MCM/MCMConflictCheck.h"
 #include "MCM/MCMScanner.h"
 #include "MCM/SWFLibraryImage.h"
+#include "MCM/SWFVectorMovie.h"
+#include "MCM/FallUIHudEditor.h"
 #include "F4SEMenuFramework.h"
 #include "Application.h"
 #include "GamepadInput.h"
@@ -98,18 +100,39 @@ namespace MCMWidgetRenderer {
     // have no keybinds.json action — the binding is shown/set but fires nothing).
     static void __stdcall NoOpHotkeyCallback() {}
 
+    // FallUI's MCM configs place decorative "intro" image controls (animated
+    // brand art such as M8r.View.FallUIHUDIntro — every FallUI mod ships one
+    // on its landing page) purely as visual backdrops for the Scaleform MCM.
+    // Flattened to a static texture by our SWF pipeline they just show up as
+    // a giant meaningless image, so we skip them entirely.
+    // M8r.View.FixFileDropdown is likewise skipped: it is an invisible AS3
+    // patch shim for MCM's file dropdowns, which we implement natively.
+    static bool IsSuppressedDecorativeImage(const std::string& className) {
+        if (className == "M8r.View.FixFileDropdown") return true;
+        return className.rfind("M8r.View.", 0) == 0 &&
+               className.find("Intro") != std::string::npos;
+    }
+
     // --- MCM Flash-library image resolution ---
     // Real MCM "image" controls reference an exported Flash symbol (className)
     // inside Data/MCM/Config/<libName>/lib.swf. The game renders those through
-    // Scaleform; since our overlay is ImGui, we instead parse the SWF and pull
-    // out the embedded bitmap (see SWFLibraryImage). The decode is done once per
-    // (libName, className) and the resulting GPU texture is cached; a failed
-    // lookup (pure vector/AS-drawn symbol, missing file, etc.) is cached as a
-    // null result so we never re-parse the SWF every frame.
+    // Scaleform; since our overlay is ImGui, we instead parse the SWF ourselves.
+    // Resolution order (first hit wins; each step cached per libName|className):
+    //   1./2. embedded bitmap in lib.swf / logo.swf   (SWFLibraryImage)
+    //   3./4. vector shapes + timeline in lib.swf / logo.swf (SWFVectorMovie —
+    //         static art is flattened to one texture; timeline animations get
+    //         a movie handle composited live in RenderControl)
+    // A miss on all paths is cached as a null result so the SWFs are never
+    // re-parsed every frame.
     struct ResolvedImage {
-        ImTextureID tex = 0;
-        int width = 0;
+        ImTextureID tex = 0;  // static texture (bitmap or flattened vector art)
+        int width = 0;        // native layout size in px (movie px for vector)
         int height = 0;
+
+        // Animated Flash symbol: the timeline + one texture per pre-rasterized
+        // shape character. When set, `tex` is unused.
+        std::shared_ptr<SWFVectorMovie::Movie> movie;
+        std::unordered_map<const SWFVectorMovie::RasterChar*, ImTextureID> charTex;
     };
 
     // Attempts to decode + upload the class's bitmap from one SWF file.
@@ -130,7 +153,65 @@ namespace MCMWidgetRenderer {
         return result;
     }
 
-    static ResolvedImage ResolveLibraryImage(const std::string& libName, const std::string& className) {
+    // Attempts the vector/timeline renderer on one SWF. Static art becomes a
+    // single flattened texture; animated movies keep the movie handle plus one
+    // texture per rasterized character for live compositing.
+    static ResolvedImage TryVectorFromSWF(const std::filesystem::path& swfPath, const std::string& className,
+                                          const std::string& cacheKey, float targetWidthPx) {
+        ResolvedImage result;
+        std::error_code ec;
+        if (!std::filesystem::exists(swfPath, ec)) {
+            return result;
+        }
+        auto movie = SWFVectorMovie::Load(swfPath, className);
+        if (!movie) {
+            return result;
+        }
+        const float nativeW = movie->WidthPx();
+        const float nativeH = movie->HeightPx();
+        if (nativeW <= 0.0f || nativeH <= 0.0f) {
+            return result;
+        }
+        result.width = static_cast<int>(nativeW + 0.5f);
+        result.height = static_cast<int>(nativeH + 0.5f);
+
+        if (movie->IsAnimated()) {
+            // Upload one texture per pre-rasterized character; frames are
+            // composited from these each render.
+            for (const auto& rc : movie->Rasters()) {
+                if (rc->image.width <= 0 || rc->image.height <= 0) {
+                    continue;
+                }
+                const std::string texKey = cacheKey + "|char" + std::to_string(rc->charId);
+                ImTextureID tex = TextureLoader::GetTextureFromMemory(
+                    texKey, rc->image.width, rc->image.height, rc->image.rgba.data());
+                if (tex) {
+                    result.charTex[rc.get()] = tex;
+                }
+            }
+            if (!result.charTex.empty()) {
+                result.movie = std::move(movie);
+            }
+            return result;
+        }
+
+        // Static: flatten frame 0 at a scale matching the intended display
+        // width (2x headroom for crisp downscaling, capped for VRAM sanity).
+        float scale = targetWidthPx > 0.0f ? (targetWidthPx / nativeW) * 2.0f : 2.0f;
+        scale = std::clamp(scale, 0.25f, 4.0f);
+        auto img = movie->RenderFrame(0, scale);
+        if (!img || img->width <= 0 || img->height <= 0) {
+            return ResolvedImage{};
+        }
+        result.tex = TextureLoader::GetTextureFromMemory(cacheKey, img->width, img->height, img->rgba.data());
+        if (!result.tex) {
+            return ResolvedImage{};
+        }
+        return result;
+    }
+
+    static ResolvedImage ResolveLibraryImage(const std::string& libName, const std::string& className,
+                                             float targetWidthPx) {
         static std::unordered_map<std::string, ResolvedImage> s_cache;
 
         const std::string key = libName + "|" + className;
@@ -142,8 +223,8 @@ namespace MCMWidgetRenderer {
         if (!libName.empty() && !className.empty()) {
             const auto folder = MCMScanner::GetScanBasePath() / libName;
 
-            // 1) The library SWF itself. Mods whose banner is an embedded bitmap
-            //    (e.g. FallUI) resolve here directly by class name.
+            // 1) Embedded bitmap in the library SWF itself. Mods whose banner
+            //    is a bitmap (e.g. FallUI) resolve here directly by class name.
             result = TryExtractFromSWF(folder / "lib.swf", className, "mcmswf|" + key);
 
             // 2) M8r's generic "McmIntros" classes draw vector chrome and load a
@@ -153,10 +234,23 @@ namespace MCMWidgetRenderer {
                 result = TryExtractFromSWF(folder / "logo.swf", className, "mcmswf|logo|" + key);
             }
 
-            if (result.tex) {
+            // 3)/4) No embedded bitmap anywhere: rasterize the symbol's vector
+            //    shapes (and timeline animation, if any) ourselves.
+            if (!result.tex) {
+                result = TryVectorFromSWF(folder / "lib.swf", className, "mcmswfvec|" + key, targetWidthPx);
+            }
+            if (!result.tex && !result.movie) {
+                result = TryVectorFromSWF(folder / "logo.swf", className, "mcmswfvec|logo|" + key, targetWidthPx);
+            }
+
+            if (result.movie) {
+                logger::info("[MCM] Loaded ANIMATED vector image '{}' for {} ({}x{} px, {} frames @ {:.1f} fps)",
+                             className, libName, result.width, result.height,
+                             result.movie->FrameCount(), result.movie->FrameRate());
+            } else if (result.tex) {
                 logger::info("[MCM] Loaded image '{}' for {} ({}x{})", className, libName, result.width, result.height);
             } else {
-                logger::debug("[MCM] No embedded bitmap for '{}' in {} (lib.swf/logo.swf)", className, libName);
+                logger::debug("[MCM] No renderable content for '{}' in {} (lib.swf/logo.swf)", className, libName);
             }
         }
 
@@ -289,11 +383,19 @@ namespace MCMWidgetRenderer {
         strncpy_s(state.textBuf, s.c_str(), sizeof(state.textBuf) - 1);
     }
 
+    // The mod whose settings INI a control actually reads/writes. Almost
+    // always the owning mod, but the real MCM honors a per-control "modName"
+    // override (FallUI Icon Library writes FallUI.ini's sItemSorterTagConfig).
+    static const std::string& TargetModFor(const MCMConfigParser::MCMControl& ctrl,
+                                           const ModRenderContext& ctx) {
+        return ctrl.modNameOverride.empty() ? ctx.modName : ctrl.modNameOverride;
+    }
+
     // Loads a control's value from the provider into its cached state.
     static void InitState(const MCMConfigParser::MCMControl& ctrl, ModRenderContext& ctx, ControlState& state) {
         if (state.initialized) return;
         if (ctrl.valueSource.type != MCMConfigParser::SourceType::None) {
-            auto result = MCMValueProvider::GetValue(ctx.modName, ctrl.valueSource);
+            auto result = MCMValueProvider::GetValue(TargetModFor(ctrl, ctx), ctrl.valueSource);
             state.lastStatus = result.status;
             state.boolVal = result.boolVal;
             state.intVal = result.intVal;
@@ -518,6 +620,10 @@ namespace MCMWidgetRenderer {
         std::string stateKey = StateKeyFor(ctrl);
         auto& state = ctx.controlStates[stateKey];
 
+        // Settings target: honors the per-control "modName" override
+        // (used by controls that edit another mod's INI, e.g. FallUI).
+        const std::string& targetMod = TargetModFor(ctrl, ctx);
+
         // Standard group condition (int / array / AND / OR / ONLY forms)
         if (!EvaluateStandardGroupCondition(ctrl, page, ctx)) {
             return;
@@ -605,13 +711,15 @@ namespace MCMWidgetRenderer {
             } else if (!ctrl.action.empty()) {
                 MCMPapyrusDispatch::ExecuteActionOnForm(ctrl.action, ctx.modName, ctrl.valueSource.sourceForm);
             }
-            MCMPapyrusAPI::DispatchSettingChanged(ctx.modName, ctrl.id);
+            // The OnMCMSettingChange event carries the mod that OWNS the
+            // setting (matters for per-control modName overrides).
+            MCMPapyrusAPI::DispatchSettingChanged(targetMod, ctrl.id);
         };
 
         // Render by control type
         if (ctrl.type == "switcher") {
             if (ImGui::Checkbox(ctrl.text.c_str(), &state.boolVal)) {
-                MCMValueProvider::SetBool(ctx.modName, ctrl.valueSource, state.boolVal);
+                MCMValueProvider::SetBool(targetMod, ctrl.valueSource, state.boolVal);
                 MCMValueProvider::FlushAll();
                 fireValueChanged(state.boolVal);
             }
@@ -637,7 +745,7 @@ namespace MCMWidgetRenderer {
                     state.floatVal = ctrl.sliderMin +
                         std::round((state.floatVal - ctrl.sliderMin) / step) * step;
                     state.floatVal = std::clamp(state.floatVal, ctrl.sliderMin, ctrl.sliderMax);
-                    MCMValueProvider::SetFloat(ctx.modName, ctrl.valueSource, state.floatVal);
+                    MCMValueProvider::SetFloat(targetMod, ctrl.valueSource, state.floatVal);
                 }
                 // Commit actions/events once the user releases the slider so we
                 // don't spam Papyrus while dragging.
@@ -651,7 +759,7 @@ namespace MCMWidgetRenderer {
                     static_cast<int>(ctrl.sliderMin), static_cast<int>(ctrl.sliderMax))) {
                     int imin = static_cast<int>(ctrl.sliderMin);
                     state.intVal = imin + ((state.intVal - imin) / istep) * istep;
-                    MCMValueProvider::SetInt(ctx.modName, ctrl.valueSource, state.intVal);
+                    MCMValueProvider::SetInt(targetMod, ctrl.valueSource, state.intVal);
                 }
                 if (ImGui::IsItemDeactivatedAfterEdit()) {
                     MCMValueProvider::FlushAll();
@@ -665,12 +773,12 @@ namespace MCMWidgetRenderer {
                 try {
                     if (isFloatSource) {
                         state.floatVal = std::stof(ctrl.valueSource.defaultValue);
-                        MCMValueProvider::SetFloat(ctx.modName, ctrl.valueSource, state.floatVal);
+                        MCMValueProvider::SetFloat(targetMod, ctrl.valueSource, state.floatVal);
                         MCMValueProvider::FlushAll();
                         fireValueChanged(state.floatVal);
                     } else {
                         state.intVal = std::stoi(ctrl.valueSource.defaultValue);
-                        MCMValueProvider::SetInt(ctx.modName, ctrl.valueSource, state.intVal);
+                        MCMValueProvider::SetInt(targetMod, ctrl.valueSource, state.intVal);
                         MCMValueProvider::FlushAll();
                         fireValueChanged(state.intVal);
                     }
@@ -703,12 +811,12 @@ namespace MCMWidgetRenderer {
                     if (stringStored) {
                         state.stringVal = options[newIdx].value.empty() ? options[newIdx].text
                                                                         : options[newIdx].value;
-                        MCMValueProvider::SetString(ctx.modName, ctrl.valueSource, state.stringVal);
+                        MCMValueProvider::SetString(targetMod, ctrl.valueSource, state.stringVal);
                         MCMValueProvider::FlushAll();
                         fireValueChanged(state.stringVal);
                     } else {
                         state.intVal = newIdx;
-                        MCMValueProvider::SetInt(ctx.modName, ctrl.valueSource, newIdx);
+                        MCMValueProvider::SetInt(targetMod, ctrl.valueSource, newIdx);
                         MCMValueProvider::FlushAll();
                         fireValueChanged(newIdx);
                     }
@@ -777,7 +885,7 @@ namespace MCMWidgetRenderer {
                         float v = state.floatVal;
                         try { v = std::stof(state.textBuf); } catch (...) {}
                         state.floatVal = v;
-                        MCMValueProvider::SetFloat(ctx.modName, ctrl.valueSource, v);
+                        MCMValueProvider::SetFloat(targetMod, ctrl.valueSource, v);
                         MCMValueProvider::FlushAll();
                         SeedTextBuf(ctrl, state);   // normalize what's shown (e.g. "40." -> "40")
                         fireValueChanged(v);
@@ -787,7 +895,7 @@ namespace MCMWidgetRenderer {
                         int v = state.intVal;
                         try { v = std::stoi(state.textBuf); } catch (...) {}
                         state.intVal = v;
-                        MCMValueProvider::SetInt(ctx.modName, ctrl.valueSource, v);
+                        MCMValueProvider::SetInt(targetMod, ctrl.valueSource, v);
                         MCMValueProvider::FlushAll();
                         SeedTextBuf(ctrl, state);
                         fireValueChanged(v);
@@ -795,7 +903,7 @@ namespace MCMWidgetRenderer {
                     }
                     default: {
                         state.stringVal = state.textBuf;
-                        MCMValueProvider::SetString(ctx.modName, ctrl.valueSource, state.stringVal);
+                        MCMValueProvider::SetString(targetMod, ctrl.valueSource, state.stringVal);
                         MCMValueProvider::FlushAll();
                         fireValueChanged(state.stringVal);
                         break;
@@ -851,15 +959,26 @@ namespace MCMWidgetRenderer {
                     ImGui::Spacing();
                 }
             }
+        } else if (ctrl.type == "image" &&
+                   FallUIHudEditor::HandlesImageControl(ctrl.imageLibName, ctrl.imageClassName)) {
+            // FallUI ships full ActionScript applications inside MCM "image"
+            // controls (the drag-and-drop HUD layout editor and the Icon
+            // Library preset manager). Those need a live Scaleform stage we
+            // don't have, so a native ImGui recreation takes over the control.
+            FallUIHudEditor::RenderImageControl(ctrl.imageLibName, ctrl.imageClassName);
+        } else if (ctrl.type == "image" && IsSuppressedDecorativeImage(ctrl.imageClassName)) {
+            // Intentionally rendered as nothing — see IsSuppressedDecorativeImage.
         } else if (ctrl.type == "image") {
             // Resolve the texture from either the Flash library (MCM's real
             // form) or a loose image file. `nativeW/H` hold the source image's
             // pixel size (used for aspect when the config omits width/height).
             ImTextureID texId = 0;
             int nativeW = 0, nativeH = 0;
+            ResolvedImage resolved;
 
             if (!ctrl.imageLibName.empty() && !ctrl.imageClassName.empty()) {
-                auto resolved = ResolveLibraryImage(ctrl.imageLibName, ctrl.imageClassName);
+                resolved = ResolveLibraryImage(ctrl.imageLibName, ctrl.imageClassName,
+                                               ctrl.imageWidth > 0.0f ? ctrl.imageWidth : 0.0f);
                 texId = resolved.tex;
                 nativeW = resolved.width;
                 nativeH = resolved.height;
@@ -867,7 +986,7 @@ namespace MCMWidgetRenderer {
 
             // Fall back to a loose image file if provided (dds/png/svg). Paths
             // are resolved relative to the game root (MCM paths are Data-relative).
-            if (!texId && !ctrl.imagePath.empty()) {
+            if (!texId && !resolved.movie && !ctrl.imagePath.empty()) {
                 std::string path = ctrl.imagePath;
                 std::error_code ec;
                 if (!std::filesystem::exists(path, ec)) {
@@ -881,7 +1000,7 @@ namespace MCMWidgetRenderer {
                 texId = TextureLoader::GetTexture(path.c_str(), want);
             }
 
-            if (texId) {
+            if (texId || resolved.movie) {
                 // Preferred display size: the control's configured width/height
                 // (what native MCM lays the symbol out at). Fall back to the
                 // source image's native size, then a square default.
@@ -896,7 +1015,41 @@ namespace MCMWidgetRenderer {
                     w *= s;
                     h *= s;
                 }
-                ImGui::Image(texId, ImVec2(w, h));
+
+                if (resolved.movie) {
+                    // Timeline-animated Flash symbol: composite this frame's
+                    // quads (per-character textures + per-frame transforms)
+                    // straight into the window draw list. The frame counter is
+                    // wall-clock based; each timeline wraps itself, so nested
+                    // sprite loops keep running past the root's length.
+                    const int frame = static_cast<int>(ImGui::GetTime() * resolved.movie->FrameRate());
+                    static std::vector<SWFVectorMovie::FrameDraw> s_draws;
+                    resolved.movie->BuildFrameDraws(frame, s_draws);
+
+                    const ImVec2 pos = ImGui::GetCursorScreenPos();
+                    const float sx = nativeW > 0 ? w / static_cast<float>(nativeW) : 1.0f;
+                    const float sy = nativeH > 0 ? h / static_cast<float>(nativeH) : 1.0f;
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    for (const auto& fd : s_draws) {
+                        auto texIt = resolved.charTex.find(fd.image);
+                        if (texIt == resolved.charTex.end()) {
+                            continue;
+                        }
+                        const ImU32 tint = IM_COL32(static_cast<int>(fd.mulR * 255.0f),
+                                                    static_cast<int>(fd.mulG * 255.0f),
+                                                    static_cast<int>(fd.mulB * 255.0f),
+                                                    static_cast<int>(fd.mulA * 255.0f));
+                        dl->AddImageQuad(texIt->second,
+                                         ImVec2(pos.x + fd.x0 * sx, pos.y + fd.y0 * sy),
+                                         ImVec2(pos.x + fd.x1 * sx, pos.y + fd.y1 * sy),
+                                         ImVec2(pos.x + fd.x2 * sx, pos.y + fd.y2 * sy),
+                                         ImVec2(pos.x + fd.x3 * sx, pos.y + fd.y3 * sy),
+                                         ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), tint);
+                    }
+                    ImGui::Dummy(ImVec2(w, h));  // reserve the layout space
+                } else {
+                    ImGui::Image(texId, ImVec2(w, h));
+                }
             } else if (!ctrl.imageClassName.empty() || !ctrl.imagePath.empty()) {
                 // Vector/ActionScript-drawn symbol with no extractable bitmap,
                 // or a missing asset: show a compact, correctly-sized placeholder
@@ -999,14 +1152,94 @@ namespace MCMWidgetRenderer {
             // window (POS_WINDOW); we expose the same value range via sliders.
             ImGui::TextUnformatted(ctrl.text.c_str());
             if (ImGui::SliderFloat((ctrl.text + " X").c_str(), &state.floatVal, ctrl.posMinX, ctrl.posMaxX)) {
-                MCMValueProvider::SetFloat(ctx.modName, ctrl.valueSource, state.floatVal);
+                MCMValueProvider::SetFloat(targetMod, ctrl.valueSource, state.floatVal);
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) {
                 MCMValueProvider::FlushAll();
                 fireValueChanged(state.floatVal);
             }
         } else if (ctrl.type == "dropdownFiles") {
-            ImGui::TextDisabled("[File dropdown: %s]", ctrl.text.c_str());
+            // Directory-listing dropdown (real MCM control type used by
+            // FallUI). Enumerates <game>/<path> for files matching the mask;
+            // the stored value is the file NAME with extension (verified from
+            // FallUI.ini: "sItemSorterTagConfig = Auto-detect.xml").
+            //
+            // The listing is cached per path|mask and refreshed lazily every
+            // few seconds so newly dropped files show up without reopening.
+            struct FileListCache {
+                std::vector<std::string> names;
+                double scannedAt = -1e9;
+            };
+            static std::unordered_map<std::string, FileListCache> s_fileLists;
+
+            const std::string cacheKey = ctrl.filesPath + "|" + ctrl.filesMask;
+            auto& cache = s_fileLists[cacheKey];
+            if (ImGui::GetTime() - cache.scannedAt > 3.0) {
+                cache.scannedAt = ImGui::GetTime();
+                cache.names.clear();
+
+                // Wildcard mask -> case-insensitive suffix/pattern match.
+                // Masks in the wild are "*.xml"-style; support prefix*suffix too.
+                auto matchesMask = [](const std::string& name, const std::string& mask) {
+                    if (mask.empty() || mask == "*" || mask == "*.*") return true;
+                    auto lower = [](std::string s) {
+                        std::transform(s.begin(), s.end(), s.begin(),
+                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                        return s;
+                    };
+                    const std::string n = lower(name);
+                    const std::string m = lower(mask);
+                    const size_t star = m.find('*');
+                    if (star == std::string::npos) return n == m;
+                    const std::string prefix = m.substr(0, star);
+                    const std::string suffix = m.substr(star + 1);
+                    return n.size() >= prefix.size() + suffix.size() &&
+                           n.compare(0, prefix.size(), prefix) == 0 &&
+                           n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0;
+                };
+
+                std::error_code ec;
+                // MCM paths are game-root relative (e.g. "data\\Interface\\ItemSorter")
+                std::filesystem::path dir = std::filesystem::current_path() / ctrl.filesPath;
+                for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+                    if (!it->is_regular_file(ec)) continue;
+                    std::string name = it->path().filename().string();
+                    if (matchesMask(name, ctrl.filesMask)) {
+                        cache.names.push_back(std::move(name));
+                    }
+                }
+                std::sort(cache.names.begin(), cache.names.end());
+            }
+
+            if (cache.names.empty()) {
+                ImGui::TextDisabled("%s: no files found (%s\\%s)", ctrl.text.c_str(),
+                                    ctrl.filesPath.c_str(), ctrl.filesMask.c_str());
+            } else {
+                // Current selection by stored file name; unknown values show
+                // as-is so we never silently rewrite a user's setting.
+                int currentIdx = -1;
+                for (int i = 0; i < static_cast<int>(cache.names.size()); ++i) {
+                    if (cache.names[i] == state.stringVal) { currentIdx = i; break; }
+                }
+
+                const char* previewText = currentIdx >= 0 ? cache.names[currentIdx].c_str()
+                                          : (state.stringVal.empty() ? "(none)" : state.stringVal.c_str());
+                ImGui::PushID(stateKey.c_str());
+                if (ImGui::BeginCombo(ctrl.text.c_str(), previewText)) {
+                    for (int i = 0; i < static_cast<int>(cache.names.size()); ++i) {
+                        const bool selected = (i == currentIdx);
+                        if (ImGui::Selectable(cache.names[i].c_str(), selected)) {
+                            state.stringVal = cache.names[i];
+                            MCMValueProvider::SetString(targetMod, ctrl.valueSource, state.stringVal);
+                            MCMValueProvider::FlushAll();
+                            fireValueChanged(state.stringVal);
+                        }
+                        if (selected) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::PopID();
+            }
         } else {
             ImGui::TextDisabled("[%s: %s]", ctrl.type.c_str(), ctrl.text.c_str());
         }
@@ -1154,6 +1387,9 @@ namespace MCMWidgetRenderer {
         }
         // Also forget completed async property reads so they re-dispatch.
         MCMValueProvider::InvalidateAsyncPropertyReads();
+        // The FallUI editor recreation caches its whole session (widgets,
+        // profiles, global settings) — drop it so it re-reads the INIs too.
+        FallUIHudEditor::ResetSession();
         logger::debug("[MCMWidgetRenderer] All control states invalidated (RefreshMenu)");
     }
 
@@ -1166,6 +1402,9 @@ namespace MCMWidgetRenderer {
         if (s_renderedModThisFrame != s_currentOpenMod) {
             if (!s_currentOpenMod.empty()) {
                 MCMPapyrusAPI::DispatchMenuClose(s_currentOpenMod);
+                // Leaving a page destroys the original Flash apps too — drop
+                // the FallUI editor session so reopening reloads from the INIs.
+                FallUIHudEditor::ResetSession();
             }
             if (!s_renderedModThisFrame.empty()) {
                 MCMPapyrusAPI::DispatchMenuOpen(s_renderedModThisFrame);

@@ -149,6 +149,18 @@ namespace MCMConfigParser {
         // Positioner range
         float posMinX = 0.0f, posMaxX = 1920.0f;
         float posMinY = 0.0f, posMaxY = 1080.0f;
+
+        // Per-control target mod override ("modName" on the control). The real
+        // MCM lets a control read/write ANOTHER mod's settings INI — FallUI's
+        // Icon Library uses this to write sItemSorterTagConfig into FallUI.ini.
+        // Empty = use the owning mod's name.
+        std::string modNameOverride;
+
+        // dropdownFiles: directory listing dropdown. "path" is relative to the
+        // game root (e.g. "data\\Interface\\ItemSorter"), "mask" a wildcard
+        // like "*.xml". The stored value is the file NAME with extension.
+        std::string filesPath;
+        std::string filesMask;
     };
 
     // Represents a page within an MCM mod's config

@@ -51,7 +51,9 @@ If you have mods that ship `Data\MCM\Config\<ModName>\config.json`:
 - With **only** this framework (no `mcm.dll`): their settings appear under **MCM Mod Configs (Legacy)** in the Mod Control Panel, and Papyrus `MCM.GetModSetting*` / `SetModSetting*` keep working if you also ship the stub `MCM.pex` from this project’s `public\Scripts\` folder.
 - With **native MCM** (`mcm.dll`) installed: by default the framework **does not** show duplicate MCM pages (native MCM stays authoritative). You can force coexistence in the framework Settings → **Load MCM Mod Configs (Legacy) Even With MCM Installed** (requires restart).
 
-See [CHANGELOG.md](CHANGELOG.md) for 3.1 details (live hotkey sync, settings safety fixes, gamepad UX).
+FallUI users: the **FallUI HUD** drag-and-drop layout editor and the **Icon Library** work here too — they are recreated natively (no Flash), and layouts/presets are fully interchangeable with the original MCM versions.
+
+See [CHANGELOG.md](CHANGELOG.md) for details (3.2: vector/animated MCM images, native FallUI editor; 3.1: live hotkey sync, settings safety fixes, gamepad UX).
 
 ---
 
@@ -115,6 +117,8 @@ At game data ready, the framework can:
 3. Read/write `Data\MCM\Settings\<ModName>.ini` (same files native MCM uses).
 4. If **`mcm.dll` is not loaded**, register the standard **MCM** Papyrus natives so scripts keep working.
 5. Optionally coexist with native MCM (settings/hotkey two-way sync when enabled).
+6. Render MCM `image` controls from mod SWFs — embedded bitmaps, **vector art, and timeline animations** (built-in rasterizer; no Flash player needed).
+7. Recreate FallUI's Flash-based **HUD layout editor** and **Icon Library** natively in ImGui, with layouts that round-trip byte-for-byte with the originals.
 
 ### For MCM mod authors (no C++ required)
 

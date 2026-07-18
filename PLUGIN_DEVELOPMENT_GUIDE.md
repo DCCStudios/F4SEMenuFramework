@@ -891,6 +891,16 @@ Data/MCM/Settings/MyMod.ini             ; user values (runtime; written by MCM o
 5. If `mcm.dll` is present, Papyrus native registration is **skipped** so the real MCM owns those bindings.
 6. Coexistence (both UIs) shares the same settings INIs; the overlay reloads from disk on open. Hotkeys can live-sync through MCM’s pause-menu Scaleform object when that movie is loaded.
 
+### Control coverage notes (3.2)
+
+Beyond the standard MCM control set, the translated pages support:
+
+- **`dropdownFiles`** — dropdown listing files on disk. `valueOptions.path` is relative to the game root, `valueOptions.mask` is a wildcard (e.g. `"path": "data\\Interface\\ItemSorter", "mask": "*.xml"`). The stored setting value is the file **name** including extension.
+- **Per-control `modName`** — a control-level `"modName"` makes that control read/write another mod's `Data/MCM/Settings/<modName>.ini` instead of the owning mod's, matching real MCM behavior.
+- **`image` controls** resolve `(imageLibName, imageClassName)` in order: embedded bitmap in `lib.swf` → bitmap in `logo.swf` → **vector shapes / timeline animation** in `lib.swf` → same in `logo.swf` (new `SWFVectorMovie` CPU rasterizer). Static vector art is flattened to one texture; timeline tweens replay at the movie's frame rate. AS3-driven animation, morph shapes, text glyphs, filters, and masks are skipped with a log line. An empty or unresolved class name falls back to the SWF's main timeline.
+- **Suppressed decorative images**: class names matching `M8r.View.*Intro*` (FallUI landing-page branding) and `M8r.View.FixFileDropdown` are intentionally rendered as nothing.
+- **FallUI Flash apps**: the image controls `M8r.Controller.FallUIHUD` (HUD layout editor) and `M8r.View.FallUIIconLibrary` (Icon Library) are taken over by native ImGui recreations (`include/MCM/FallUIHudEditor.h`). Persisted data formats are identical to the Flash originals, so layouts round-trip with real FallUI and its runtime HUD swf applies them unchanged.
+
 ### INI / Settings UI
 
 ```ini
@@ -903,7 +913,7 @@ Toggles in the framework Settings window require a **game restart** to rescan.
 
 ### Pause-menu entry
 
-Shipping `Data/Interface/F4SEFramework.swf` adds an **"F4SE Framework"** row to the ESC pause list. Selecting it opens the ImGui overlay **on top of** the pause menu (the pause menu is not dismissed — input to it is blocked while the overlay is open). That keeps MCM’s `root.mcm` object available for live hotkey sync when coexistence is on.
+Shipping `Data/Interface/F4SEFramework.swf` adds an **"F4SE FRAMEWORK"** row to the ESC pause list (all caps, matching the vanilla entries). Selecting it opens the ImGui overlay **on top of** the pause menu (the pause menu is not dismissed — input to it is blocked while the overlay is open). That keeps MCM’s `root.mcm` object available for live hotkey sync when coexistence is on.
 
 Player-oriented summary: [README.md — MCM translation layer](README.md#mcm-translation-layer).
 

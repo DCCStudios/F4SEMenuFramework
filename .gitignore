@@ -16,3 +16,16 @@ Compile/
 
 # vcpkg installed packages (fetched on configure)
 **/vcpkg_installed/
+
+# Offline SWF/FallUI test harness: build artifacts and local scratch data
+# (extracted mod SWF decompilations, copied game files, rendered PNGs).
+# Sources (swftest.cpp, falluitest.cpp, build_*.bat, fakes/) stay tracked.
+swf/test/*.obj
+swf/test/*.exe
+swf/test/bin/
+swf/test/out/
+swf/test/decomp/
+swf/test/_art/
+swf/test/_gameroot/
+swf/test/_tf_metrics.txt
+swf/test/_tmp*.py

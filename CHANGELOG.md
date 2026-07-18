@@ -2,6 +2,41 @@
 
 All notable changes to F4SE Menu Framework are documented in this file.
 
+## [3.2.0] — 2026-07-17
+
+Feature release: MCM image controls can now render Flash **vector art and timeline animations**, and FallUI's Flash-based in-MCM applications (the drag-and-drop **HUD layout editor** and the **Icon Library** preset manager) are recreated natively in ImGui with byte-identical persistence.
+
+### MCM images — vector shapes and timeline animation (`SWFVectorMovie`)
+
+- Previously only symbols with an **embedded raster bitmap** could be shown from `lib.swf` / `logo.swf`. A new CPU rasterizer (`SWFVectorMovie`) now handles symbols drawn with Flash **vector shapes** (`DefineShape1–4`: solid / gradient / bitmap fills and line strokes) and symbols **animated on the timeline** (per-frame `PlaceObject` matrices and color transforms).
+- Resolution order per `(imageLibName, imageClassName)` — first hit wins, each step cached: embedded bitmap in `lib.swf` → bitmap in `logo.swf` → vector/timeline in `lib.swf` → vector/timeline in `logo.swf`. An empty/unknown class name falls back to the file's own main timeline (covers `logo.swf`-style files whose stage *is* the artwork).
+- **Static** symbols are flattened once into a single supersampled RGBA texture; **animated** symbols replay their tweens as textured quads at the movie's frame rate. ActionScript-driven animation is out of scope (needs a Flash VM). Morph shapes, font glyph rendering, filters, non-normal blend modes, and clip masks are logged and skipped, never failing the whole movie.
+- Decorative full-page **"intro" branding images** (`M8r.View.*Intro*` — every FallUI mod ships one as its landing page — plus the `M8r.View.FixFileDropdown` shim) are suppressed instead of rendered, so FallUI landing pages show only functional controls.
+
+### FallUI HUD layout editor and Icon Library — native recreations
+
+- The real FallUI mods embed full AS3 applications inside MCM `image` controls; those need a live Scaleform stage the translation layer doesn't provide. The two app controls (`M8r.Controller.FallUIHUD`, `M8r.View.FallUIIconLibrary`) are now **taken over by native ImGui recreations** (`FallUIHudEditor`).
+- **HUD editor**: drag-and-drop canvas with every widget from the original catalog (ported from decompiled `HUDLayoutOptions.as`), per-widget floating edit panel with the full 1:1 option set (scale, rotation, visibility, colors, anchors, nudge arrows, and every widget-specific modifier), global settings, easy mode, profiles, and import/export from installed FallUI layout preset mods.
+- **Persistence is format-identical** to the originals (verified against shipped presets): widget lines use FallUI's packed `on:<x>x<y>*<sx>*<sy>r<rot>:<k=v,...>` strings and editor/global settings use the M8r StringPacker `name;type;value;...` format, all in `Data/MCM/Settings/FallUIHUD.ini`. Layouts made here load in the Flash editor and vice versa, and FallUI's runtime HUD swf applies them unmodified.
+- **Preview fidelity**: widget previews are drawn from each widget's live modifier values, using real art rasterized out of FallUI's `HUDMenu.swf` (crosshair, hit indicators, Vault Boy, compass/stealth chrome, icons — tinted with the game's current HUD color) plus procedural bars/text for elements Flash renders dynamically. 2D rotation and the full 3D options (`act3D`, `RX`/`RY`/`RZ`, perspective `LP`/`LPFOV`) are applied at the vertex level, so presets like **3D-Demo** preview correctly.
+- **Icon Library** preset logic (item-sorter tag config selection) is recreated natively, writing the same setting the original wrote into FallUI's INI.
+
+### MCM config parser — new control features
+
+- **`dropdownFiles`** control type: a dropdown listing files from a directory. `valueOptions.path` is relative to the game root (e.g. `data\Interface\ItemSorter`), `valueOptions.mask` is a wildcard like `*.xml`; the stored value is the file name with extension.
+- **Per-control `modName` override**: a control can read/write **another mod's** settings INI, matching real MCM behavior (FallUI's Icon Library writes `sItemSorterTagConfig` into `FallUI.ini` this way). All setters/getters and `OnMCMSettingChange` dispatch honor the override.
+
+### UI fixes
+
+- **Floating panel z-order**: the HUD editor's floating panels (edit panel, global settings, import dialog, widgets list) are kept above the main window every frame (previously they could fall behind it after first use, becoming unclickable). Active popup modals still take precedence.
+- **Label clipping**: widget hover/selection titles and drag measurement text are clamped inside the canvas; titles near the top edge flip below the widget.
+- Pause-menu row is now **"F4SE FRAMEWORK"** (all caps) to match the vanilla entries, which are uppercased localisation strings.
+
+### Tooling (repo, not shipped)
+
+- `swf/test/build_swftest.bat` + `swftest.cpp`: standalone validator that renders SWF symbols to PNGs (with `_dark` variants for white-on-transparent art) for offline verification of the vector rasterizer.
+- `swf/test/build_falluitest.bat` + `falluitest.cpp`: headless harness for the FallUI editor — StringPacker/layout roundtrips, preset decoding, import/migration, and session behavior against real preset INIs, no game required.
+
 ## [3.1.1] — 2026-07-17
 
 Compatibility and hardening release: fixes for MCM mods whose settings or scripted actions didn't work through the translation layer, ABI-compatible natives for plugins that call MCM functions directly, crash guards, menu search, and gamepad UX polish.

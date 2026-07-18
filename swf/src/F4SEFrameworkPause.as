@@ -28,8 +28,10 @@ package
 		// positively identify a click on our row.
 		private static const F4SE_ENTRY_INDEX:int = 500;
 
-		// Label shown on the injected row.
-		private static const F4SE_ENTRY_TEXT:String = "F4SE Framework";
+		// Label shown on the injected row. ALL CAPS to match the vanilla pause
+		// menu entries (MOD CONFIG, QUICKSAVE, ...), which are uppercased
+		// localisation strings rather than styled by the list renderer.
+		private static const F4SE_ENTRY_TEXT:String = "F4SE FRAMEWORK";
 
 		// MCM stores its row in entryList using this raw localisation key; we
 		// match on it to sit directly above MCM's entry.

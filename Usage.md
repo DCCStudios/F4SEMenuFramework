@@ -276,6 +276,13 @@ Use the normal MCM script API (`GetModSettingInt`, `SetModSettingFloat`, `Regist
 
 `MCM.GetVersionCode()` from the framework reports **9** (aligned with MCM 1.40-style checks).
 
+### Control and image support notes
+
+- All standard MCM control types are supported, plus **`dropdownFiles`** (directory-listing dropdown: `valueOptions.path` relative to the game root, `valueOptions.mask` wildcard; stores the file name with extension) and the per-control **`modName`** override (the control targets another mod's settings INI, as in real MCM).
+- **`image` controls** can use loose files (`imagePath`) or Flash library symbols (`imageLibName` / `imageClassName`). Symbol lookup tries embedded bitmaps first, then falls back to a built-in **vector-shape / timeline-animation rasterizer** — so gradient art, vector logos, and tween animations from `lib.swf` / `logo.swf` display without any bitmap export. Animation driven by ActionScript (not the timeline) cannot be replayed.
+- Full-page decorative branding images (`M8r.View.*Intro*` classes) are suppressed so pages show only functional controls.
+- FallUI's embedded Flash apps — the **HUD layout editor** (`M8r.Controller.FallUIHUD`) and **Icon Library** (`M8r.View.FallUIIconLibrary`) — are recreated natively in ImGui. They read and write the exact same `Data/MCM/Settings/FallUIHUD.ini` formats as the originals, so layouts and presets round-trip with real FallUI.
+
 ### If you are a C++ plugin author
 
 - Prefer the framework’s own `AddSectionItem` pages for native ImGui UX.

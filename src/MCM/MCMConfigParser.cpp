@@ -186,6 +186,15 @@ namespace MCMConfigParser {
             if (vo.contains("sharedOptions") && vo["sharedOptions"].is_string()) {
                 ctrl.optionsFrom = vo["sharedOptions"].get<std::string>();
             }
+            // dropdownFiles directory + wildcard mask (FallUI Icon Library etc.)
+            if (vo.contains("path") && vo["path"].is_string()) ctrl.filesPath = vo["path"].get<std::string>();
+            if (vo.contains("mask") && vo["mask"].is_string()) ctrl.filesMask = vo["mask"].get<std::string>();
+        }
+
+        // Per-control target-mod override: the control reads/writes settings in
+        // ANOTHER mod's INI (real MCM behavior; FallUI Icon Library relies on it).
+        if (j.contains("modName") && j["modName"].is_string()) {
+            ctrl.modNameOverride = j["modName"].get<std::string>();
         }
 
         // Slider properties

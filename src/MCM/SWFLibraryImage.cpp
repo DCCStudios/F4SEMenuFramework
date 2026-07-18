@@ -1,14 +1,11 @@
 #include "MCM/SWFLibraryImage.h"
 
+#include "MCM/SWFParseCommon.h"
+
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
-#include <fstream>
-#include <map>
 #include <unordered_map>
 #include <unordered_set>
-
-#include <zlib.h>
 
 // Optional verbose tracing for the standalone test harness. The plugin build
 // leaves this undefined so nothing is printed at runtime.
@@ -20,175 +17,9 @@
 
 namespace SWFLibraryImage {
 
+    using namespace SWFParse;
+
     namespace {
-
-        // ---- SWF tag codes we care about -------------------------------------
-        constexpr std::uint16_t kTagEnd = 0;
-        constexpr std::uint16_t kTagDefineShape = 2;
-        constexpr std::uint16_t kTagPlaceObject = 4;
-        constexpr std::uint16_t kTagDefineBitsJPEG2 = 21;
-        constexpr std::uint16_t kTagDefineShape2 = 22;
-        constexpr std::uint16_t kTagPlaceObject2 = 26;
-        constexpr std::uint16_t kTagDefineShape3 = 32;
-        constexpr std::uint16_t kTagDefineBitsLossless = 20;
-        constexpr std::uint16_t kTagDefineBitsJPEG3 = 35;
-        constexpr std::uint16_t kTagDefineBitsLossless2 = 36;
-        constexpr std::uint16_t kTagDefineSprite = 39;
-        constexpr std::uint16_t kTagPlaceObject3 = 70;
-        constexpr std::uint16_t kTagSymbolClass = 76;
-        constexpr std::uint16_t kTagDefineShape4 = 83;
-        constexpr std::uint16_t kTagDefineBitsJPEG4 = 90;
-
-        // A raster character (bitmap) definition, kept as a byte range into the
-        // decompressed movie body so we only decode the one we actually need.
-        struct BitmapRecord {
-            std::uint16_t tagCode = 0;  // Lossless/Lossless2/JPEG* tag id
-            std::uint8_t format = 0;    // 3/4/5 for lossless
-            int width = 0;
-            int height = 0;
-            std::uint16_t colorTableCount = 0;  // format 3 only
-            std::size_t dataOffset = 0;         // start of zlib/jpeg payload in body
-            std::size_t dataLen = 0;            // payload length
-            std::uint32_t jpegAlphaOffset = 0;  // JPEG3/4: split point (jpeg | alpha)
-        };
-
-        // -------------------------------------------------------------------
-        // Robust zlib inflate that grows its output buffer as needed.
-        // -------------------------------------------------------------------
-        bool Inflate(const std::uint8_t* a_src, std::size_t a_srcLen, std::vector<std::uint8_t>& a_out, std::size_t a_hint) {
-            z_stream strm{};
-            if (inflateInit(&strm) != Z_OK) {
-                return false;
-            }
-            strm.next_in = const_cast<Bytef*>(a_src);
-            strm.avail_in = static_cast<uInt>(a_srcLen);
-
-            a_out.clear();
-            a_out.resize(a_hint ? a_hint : 65536);
-
-            std::size_t total = 0;
-            int ret = Z_OK;
-            do {
-                if (total == a_out.size()) {
-                    a_out.resize(a_out.size() * 2);
-                }
-                strm.next_out = a_out.data() + total;
-                strm.avail_out = static_cast<uInt>(a_out.size() - total);
-                ret = inflate(&strm, Z_NO_FLUSH);
-                total = a_out.size() - strm.avail_out;
-                if (ret == Z_STREAM_END) {
-                    break;
-                }
-                if (ret != Z_OK) {
-                    inflateEnd(&strm);
-                    return false;
-                }
-            } while (strm.avail_in > 0 || strm.avail_out == 0);
-
-            inflateEnd(&strm);
-            a_out.resize(total);
-            return true;
-        }
-
-        // -------------------------------------------------------------------
-        // Sequential reader over the decompressed movie body, with bit-level
-        // reads for the SWF's packed RECT / MATRIX structures.
-        // -------------------------------------------------------------------
-        class Reader {
-        public:
-            Reader(const std::uint8_t* a_data, std::size_t a_size) :
-                _data(a_data), _size(a_size) {}
-
-            std::size_t Pos() const { return _pos; }
-            void Seek(std::size_t a_pos) { _pos = a_pos; AlignByte(); }
-            bool Eof() const { return _pos >= _size; }
-            std::size_t Remaining() const { return _pos < _size ? _size - _pos : 0; }
-
-            std::uint8_t U8() {
-                AlignByte();
-                return _pos < _size ? _data[_pos++] : 0;
-            }
-            std::uint16_t U16() {
-                std::uint16_t lo = U8();
-                std::uint16_t hi = U8();
-                return static_cast<std::uint16_t>(lo | (hi << 8));
-            }
-            std::uint32_t U32() {
-                std::uint32_t b0 = U8(), b1 = U8(), b2 = U8(), b3 = U8();
-                return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
-            }
-
-            // Null-terminated ASCII string.
-            std::string CStr() {
-                AlignByte();
-                std::string s;
-                while (_pos < _size) {
-                    char c = static_cast<char>(_data[_pos++]);
-                    if (c == '\0') {
-                        break;
-                    }
-                    s.push_back(c);
-                }
-                return s;
-            }
-
-            void Skip(std::size_t a_n) {
-                AlignByte();
-                _pos = (_pos + a_n <= _size) ? _pos + a_n : _size;
-            }
-
-            std::uint32_t Bits(int a_n) {
-                std::uint32_t v = 0;
-                for (int i = 0; i < a_n; ++i) {
-                    if (_bitCount == 0) {
-                        _bitBuf = _pos < _size ? _data[_pos++] : 0;
-                        _bitCount = 8;
-                    }
-                    --_bitCount;
-                    v = (v << 1) | ((_bitBuf >> _bitCount) & 1u);
-                }
-                return v;
-            }
-
-            void AlignByte() { _bitCount = 0; }
-
-            // RECT: UB[5] nbits, then 4 * SB[nbits]. Byte-aligned afterward.
-            void SkipRect() {
-                int n = static_cast<int>(Bits(5));
-                Bits(n);
-                Bits(n);
-                Bits(n);
-                Bits(n);
-                AlignByte();
-            }
-
-            // MATRIX: optional scale/rotate + translate, all bit-packed.
-            void SkipMatrix() {
-                if (Bits(1)) {  // HasScale
-                    int n = static_cast<int>(Bits(5));
-                    Bits(n);
-                    Bits(n);
-                }
-                if (Bits(1)) {  // HasRotate
-                    int n = static_cast<int>(Bits(5));
-                    Bits(n);
-                    Bits(n);
-                }
-                int nt = static_cast<int>(Bits(5));  // NTranslateBits
-                Bits(nt);
-                Bits(nt);
-                AlignByte();
-            }
-
-            const std::uint8_t* DataAt(std::size_t a_off) const { return _data + a_off; }
-
-        private:
-            const std::uint8_t* _data;
-            std::size_t _size;
-            std::size_t _pos = 0;
-            std::uint8_t _bitBuf = 0;
-            int _bitCount = 0;
-        };
 
         // -------------------------------------------------------------------
         // Fill-style scan of a DefineShapeN body: collects bitmap character IDs
@@ -236,172 +67,11 @@ namespace SWFLibraryImage {
             }
         }
 
-        // -------------------------------------------------------------------
-        // Un-premultiply a single ARGB sample into straight RGBA in `dst`.
-        // -------------------------------------------------------------------
-        inline void StoreUnpremul(std::uint8_t* a_dst, std::uint8_t a_a, std::uint8_t a_r, std::uint8_t a_g, std::uint8_t a_b) {
-            if (a_a == 0) {
-                a_dst[0] = a_dst[1] = a_dst[2] = 0;
-                a_dst[3] = 0;
-                return;
-            }
-            if (a_a == 255) {
-                a_dst[0] = a_r;
-                a_dst[1] = a_g;
-                a_dst[2] = a_b;
-                a_dst[3] = 255;
-                return;
-            }
-            auto up = [a_a](std::uint8_t c) -> std::uint8_t {
-                int v = (static_cast<int>(c) * 255 + a_a / 2) / a_a;
-                return static_cast<std::uint8_t>(v > 255 ? 255 : v);
-            };
-            a_dst[0] = up(a_r);
-            a_dst[1] = up(a_g);
-            a_dst[2] = up(a_b);
-            a_dst[3] = a_a;
-        }
-
-        inline std::uint8_t Expand5(std::uint32_t a_c5) {
-            std::uint8_t c = static_cast<std::uint8_t>(a_c5 & 0x1F);
-            return static_cast<std::uint8_t>((c << 3) | (c >> 2));
-        }
-
-        // -------------------------------------------------------------------
-        // Decode a DefineBitsLossless / DefineBitsLossless2 bitmap to RGBA.
-        // -------------------------------------------------------------------
-        bool DecodeLossless(const BitmapRecord& a_rec, const std::uint8_t* a_body, DecodedImage& a_out) {
-            const bool hasAlpha = (a_rec.tagCode == kTagDefineBitsLossless2);
-
-            std::vector<std::uint8_t> raw;
-            const std::size_t hint = static_cast<std::size_t>(a_rec.width) * a_rec.height * 4 + 4096;
-            if (!Inflate(a_body + a_rec.dataOffset, a_rec.dataLen, raw, hint)) {
-                return false;
-            }
-
-            a_out.width = a_rec.width;
-            a_out.height = a_rec.height;
-            a_out.rgba.assign(static_cast<std::size_t>(a_rec.width) * a_rec.height * 4, 0);
-
-            if (a_rec.format == 5) {
-                // 32-bit: Lossless2 = ARGB (premultiplied); Lossless = (pad)RGB.
-                const std::size_t need = static_cast<std::size_t>(a_rec.width) * a_rec.height * 4;
-                if (raw.size() < need) {
-                    return false;
-                }
-                for (std::size_t i = 0; i < static_cast<std::size_t>(a_rec.width) * a_rec.height; ++i) {
-                    const std::uint8_t* p = raw.data() + i * 4;
-                    std::uint8_t* d = a_out.rgba.data() + i * 4;
-                    if (hasAlpha) {
-                        StoreUnpremul(d, p[0], p[1], p[2], p[3]);  // A,R,G,B
-                    } else {
-                        d[0] = p[1];
-                        d[1] = p[2];
-                        d[2] = p[3];
-                        d[3] = 255;  // p[0] reserved
-                    }
-                }
-                return true;
-            }
-
-            if (a_rec.format == 4) {
-                // 15-bit: 2 bytes/pixel, rows padded to 32-bit boundary.
-                const std::size_t stride = ((static_cast<std::size_t>(a_rec.width) * 2 + 3) & ~std::size_t{3});
-                if (raw.size() < stride * a_rec.height) {
-                    return false;
-                }
-                for (int y = 0; y < a_rec.height; ++y) {
-                    for (int x = 0; x < a_rec.width; ++x) {
-                        const std::uint8_t* p = raw.data() + y * stride + x * 2;
-                        std::uint16_t px = static_cast<std::uint16_t>(p[0] | (p[1] << 8));
-                        std::uint8_t* d = a_out.rgba.data() + (static_cast<std::size_t>(y) * a_rec.width + x) * 4;
-                        d[0] = Expand5(px >> 10);
-                        d[1] = Expand5(px >> 5);
-                        d[2] = Expand5(px);
-                        d[3] = 255;
-                    }
-                }
-                return true;
-            }
-
-            if (a_rec.format == 3) {
-                // 8-bit colormapped. Palette: RGBA (Lossless2, premultiplied) or
-                // RGB (Lossless). Index rows padded to 32-bit boundary.
-                const int entryBytes = hasAlpha ? 4 : 3;
-                const std::size_t paletteBytes = static_cast<std::size_t>(a_rec.colorTableCount) * entryBytes;
-                const std::size_t stride = ((static_cast<std::size_t>(a_rec.width) + 3) & ~std::size_t{3});
-                if (raw.size() < paletteBytes + stride * a_rec.height) {
-                    return false;
-                }
-                // Pre-expand palette to straight RGBA.
-                std::vector<std::uint8_t> pal(static_cast<std::size_t>(a_rec.colorTableCount) * 4, 0);
-                for (int i = 0; i < a_rec.colorTableCount; ++i) {
-                    const std::uint8_t* s = raw.data() + static_cast<std::size_t>(i) * entryBytes;
-                    if (hasAlpha) {
-                        StoreUnpremul(pal.data() + i * 4, s[3], s[0], s[1], s[2]);  // stored RGBA premul
-                    } else {
-                        pal[i * 4 + 0] = s[0];
-                        pal[i * 4 + 1] = s[1];
-                        pal[i * 4 + 2] = s[2];
-                        pal[i * 4 + 3] = 255;
-                    }
-                }
-                const std::uint8_t* idx = raw.data() + paletteBytes;
-                for (int y = 0; y < a_rec.height; ++y) {
-                    for (int x = 0; x < a_rec.width; ++x) {
-                        std::uint8_t ci = idx[y * stride + x];
-                        if (ci >= a_rec.colorTableCount) {
-                            ci = 0;
-                        }
-                        std::memcpy(a_out.rgba.data() + (static_cast<std::size_t>(y) * a_rec.width + x) * 4,
-                                    pal.data() + static_cast<std::size_t>(ci) * 4, 4);
-                    }
-                }
-                return true;
-            }
-
-            return false;
-        }
-
     }  // namespace
 
-    // JPEG decode is Windows/WIC-only and pulled in through a separate helper so
-    // the lossless path (which covers real MCM content) stays dependency-light.
-    // Defined at the bottom of the file.
-    namespace {
-        bool DecodeJPEG(const std::uint8_t* a_jpeg, std::size_t a_len, DecodedImage& a_out);
-    }
-
     std::optional<DecodedImage> Extract(const std::filesystem::path& a_swfPath, const std::string& a_className) {
-        // --- Read whole file ------------------------------------------------
-        std::ifstream file(a_swfPath, std::ios::binary);
-        if (!file) {
-            return std::nullopt;
-        }
-        std::vector<std::uint8_t> file_bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        if (file_bytes.size() < 8) {
-            return std::nullopt;
-        }
-
-        // --- Header + container decompression -------------------------------
-        const char sig0 = static_cast<char>(file_bytes[0]);
-        const char sig1 = static_cast<char>(file_bytes[1]);
-        const char sig2 = static_cast<char>(file_bytes[2]);
-        if (sig1 != 'W' || sig2 != 'S') {
-            return std::nullopt;
-        }
-        const std::uint32_t fileLength = file_bytes[4] | (file_bytes[5] << 8) | (file_bytes[6] << 16) | (static_cast<std::uint32_t>(file_bytes[7]) << 24);
-
-        std::vector<std::uint8_t> body;  // everything after the 8-byte header
-        if (sig0 == 'F') {               // FWS: uncompressed
-            body.assign(file_bytes.begin() + 8, file_bytes.end());
-        } else if (sig0 == 'C') {  // CWS: zlib
-            const std::size_t hint = fileLength > 8 ? fileLength - 8 : file_bytes.size() * 4;
-            if (!Inflate(file_bytes.data() + 8, file_bytes.size() - 8, body, hint)) {
-                return std::nullopt;
-            }
-        } else {
-            // ZWS (LZMA) — not supported.
+        std::vector<std::uint8_t> body;
+        if (!ReadMovieBody(a_swfPath.string(), body)) {
             return std::nullopt;
         }
 
@@ -466,18 +136,14 @@ namespace SWFLibraryImage {
                 BitmapRecord rec;
                 rec.tagCode = tagCode;
                 std::uint16_t cid = r.U16();
-                if (tagCode == kTagDefineBitsJPEG2) {
-                    rec.dataOffset = r.Pos();
-                    rec.dataLen = tagEnd > rec.dataOffset ? tagEnd - rec.dataOffset : 0;
-                } else {
-                    std::uint32_t alphaOff = r.U32();
+                if (tagCode != kTagDefineBitsJPEG2) {
+                    rec.jpegAlphaOffset = r.U32();
                     if (tagCode == kTagDefineBitsJPEG4) {
                         r.U16();  // deblock param
                     }
-                    rec.dataOffset = r.Pos();
-                    rec.dataLen = alphaOff;  // JPEG portion length
-                    rec.jpegAlphaOffset = alphaOff;
                 }
+                rec.dataOffset = r.Pos();
+                rec.dataLen = tagEnd > rec.dataOffset ? tagEnd - rec.dataOffset : 0;
                 // Dimensions unknown until decoded; mark as 0 so lossless bitmaps
                 // (with known area) win "largest" comparisons.
                 bitmaps[cid] = rec;
@@ -518,7 +184,10 @@ namespace SWFLibraryImage {
                     } else if (sTag == kTagPlaceObject2) {
                         std::uint8_t flags = r.U8();
                         r.U16();  // depth
-                        if (flags & 0x40) {  // HasCharacter
+                        // PlaceFlagHasCharacter is bit 1 (0x02) per the SWF
+                        // spec (bit 6 is HasClipDepth — a long-standing bug
+                        // here used that and missed sprite-placed bitmaps).
+                        if (flags & 0x02) {
                             placed.push_back(r.U16());
                         }
                     } else if (sTag == kTagPlaceObject3) {
@@ -527,7 +196,7 @@ namespace SWFLibraryImage {
                         r.U16();  // depth
                         const bool hasClassName = (flags2 & 0x08) != 0;
                         const bool hasImage = (flags2 & 0x10) != 0;
-                        const bool hasChar = (flags & 0x40) != 0;
+                        const bool hasChar = (flags & 0x02) != 0;
                         if (hasClassName || (hasImage && hasChar)) {
                             r.CStr();  // class name
                         }
@@ -647,79 +316,19 @@ namespace SWFLibraryImage {
                   rec.tagCode == kTagDefineBitsLossless2 ? "Lossless2" : rec.tagCode == kTagDefineBitsLossless ? "Lossless" : "JPEG",
                   rec.width, rec.height);
 
-        DecodedImage out;
-        if (rec.tagCode == kTagDefineBitsLossless || rec.tagCode == kTagDefineBitsLossless2) {
-            if (!DecodeLossless(rec, body.data(), out)) {
-                return std::nullopt;
-            }
-        } else {
-            if (!DecodeJPEG(body.data() + rec.dataOffset, rec.dataLen, out)) {
-                return std::nullopt;
-            }
-        }
-        if (out.width <= 0 || out.height <= 0 || out.rgba.empty()) {
+        Image img;
+        if (!DecodeBitmap(rec, body.data(), img)) {
             return std::nullopt;
         }
+        if (img.width <= 0 || img.height <= 0 || img.rgba.empty()) {
+            return std::nullopt;
+        }
+
+        DecodedImage out;
+        out.width = img.width;
+        out.height = img.height;
+        out.rgba = std::move(img.rgba);
         return out;
     }
 
-}  // namespace SWFLibraryImage
-
-// ---------------------------------------------------------------------------
-// WIC-based JPEG decoder (best-effort, no alpha channel). Isolated here so the
-// rest of the module has no Windows dependency.
-// ---------------------------------------------------------------------------
-#include <wincodec.h>
-#include <wrl/client.h>
-
-namespace SWFLibraryImage {
-    namespace {
-        bool DecodeJPEG(const std::uint8_t* a_jpeg, std::size_t a_len, DecodedImage& a_out) {
-            if (!a_jpeg || a_len == 0) {
-                return false;
-            }
-            using Microsoft::WRL::ComPtr;
-
-            // WIC needs COM; init per-call in single-threaded apartment-agnostic
-            // mode and tolerate "already initialized".
-            HRESULT coInit = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-            const bool didInit = SUCCEEDED(coInit);
-
-            bool ok = false;
-            {
-                ComPtr<IWICImagingFactory> factory;
-                if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)))) {
-                    ComPtr<IWICStream> stream;
-                    if (SUCCEEDED(factory->CreateStream(&stream)) &&
-                        SUCCEEDED(stream->InitializeFromMemory(const_cast<BYTE*>(a_jpeg), static_cast<DWORD>(a_len)))) {
-                        ComPtr<IWICBitmapDecoder> decoder;
-                        if (SUCCEEDED(factory->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &decoder))) {
-                            ComPtr<IWICBitmapFrameDecode> frame;
-                            if (SUCCEEDED(decoder->GetFrame(0, &frame))) {
-                                ComPtr<IWICFormatConverter> conv;
-                                if (SUCCEEDED(factory->CreateFormatConverter(&conv)) &&
-                                    SUCCEEDED(conv->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
-                                    UINT w = 0, h = 0;
-                                    conv->GetSize(&w, &h);
-                                    if (w > 0 && h > 0) {
-                                        a_out.width = static_cast<int>(w);
-                                        a_out.height = static_cast<int>(h);
-                                        a_out.rgba.assign(static_cast<std::size_t>(w) * h * 4, 0);
-                                        if (SUCCEEDED(conv->CopyPixels(nullptr, w * 4, static_cast<UINT>(a_out.rgba.size()), a_out.rgba.data()))) {
-                                            ok = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (didInit) {
-                CoUninitialize();
-            }
-            return ok;
-        }
-    }  // namespace
 }  // namespace SWFLibraryImage
