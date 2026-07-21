@@ -58,7 +58,7 @@ The built-in FallUI HUD editor and Icon Library let you edit the [b]base presets
 [list]
 [*][url=https://f4se.silverlock.org/]F4SE[/url][/*]
 [*][url=https://www.nexusmods.com/fallout4/mods/47327]Address Library for F4SE Plugins[/url][/*]
-[*]Fallout 4 [b]1.10.163[/b] (pre-next-gen / "old-gen"). Next-Gen, Game Pass, and VR are [b]not[/b] supported.[/*]
+[*]Fallout 4 [b]1.10.163[/b] (old-gen), [b]1.10.980 / 1.10.984[/b] (Next-Gen), or [b]1.11.x[/b] (current patches). One DLL supports all of them. Game Pass and VR are [b]not[/b] supported (no F4SE).[/*]
 [/list]
 
 [line]

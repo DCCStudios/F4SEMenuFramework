@@ -139,6 +139,14 @@ int GetKeyBinding(std::string input, RE::INPUT_DEVICE device) {
         {"DELETE", 0xD3},
         {"LEFTWIN", 0xDB},
         {"RIGHTWIN", 0xDC},
+        // Mouse buttons share the keyboard binding space above the DIK range,
+        // following the F4SE/Papyrus keycode convention (256 = left button).
+        // The real MCM supports mouse binds too, so the translation layer must.
+        {"MOUSELEFT", 256},
+        {"MOUSERIGHT", 257},
+        {"MOUSEMIDDLE", 258},
+        {"MOUSE4", 259},
+        {"MOUSE5", 260},
     };
 
     const std::unordered_map<std::string, int> keymapGP = {
@@ -276,6 +284,12 @@ std::string GetKeyName(int keyCode, RE::INPUT_DEVICE device) {
         {0xD3, "DELETE"},
         {0xDB, "LEFTWIN"},
         {0xDC, "RIGHTWIN"},
+        // Mouse buttons (F4SE/Papyrus keycode convention, 256 = left button)
+        {256, "MOUSELEFT"},
+        {257, "MOUSERIGHT"},
+        {258, "MOUSEMIDDLE"},
+        {259, "MOUSE4"},
+        {260, "MOUSE5"},
     };
     
     const std::unordered_map<int, std::string> keymapGP = {

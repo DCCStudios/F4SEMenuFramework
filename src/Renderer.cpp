@@ -1,4 +1,4 @@
-﻿#include "Renderer.h"
+#include "Renderer.h"
 #include "WindowManager.h"
 #include "Config.h"
 #include "Input.h"
@@ -18,24 +18,24 @@ bool UI::Renderer::ProcessOpenClose(RE::InputEvent* const* evns) {
         const auto temp_toggleKey = temp_device == RE::INPUT_DEVICE::kKeyboard ? Config::ToggleKey : Config::ToggleKeyGamePad;
         if (static_cast<unsigned int>(a_event->idCode) == temp_toggleKey) {
 
-            if (WindowManager::MainInterface->IsOpen.load() && a_event->JustPressed()) {
+            if (WindowManager::MainInterface->IsOpen.load() && a_event->QJustPressed()) {
                 WindowManager::Close();
             } else {
 
                 if (temp_device == RE::INPUT_DEVICE::kKeyboard) {
-                    if (a_event->JustPressed()) DoublePressDetectorKeyboard.press();
+                    if (a_event->QJustPressed()) DoublePressDetectorKeyboard.press();
 
-                    if (Config::ToggleMode == 0 && a_event->JustPressed() ||
+                    if (Config::ToggleMode == 0 && a_event->QJustPressed() ||
                         Config::ToggleMode == 1 && a_event->heldDownSecs > 0.4f ||
-                        Config::ToggleMode == 2 && DoublePressDetectorKeyboard && a_event->JustPressed()) {
+                        Config::ToggleMode == 2 && DoublePressDetectorKeyboard && a_event->QJustPressed()) {
                         WindowManager::Open();
                         return true;
                     };
                 } else {
-                    if (a_event->JustPressed()) DoublePressDetectorGamepad.press();
-                    if (Config::ToggleModeGamePad == 0 && a_event->JustPressed() ||
+                    if (a_event->QJustPressed()) DoublePressDetectorGamepad.press();
+                    if (Config::ToggleModeGamePad == 0 && a_event->QJustPressed() ||
                         Config::ToggleModeGamePad == 1 && a_event->heldDownSecs > 0.4f ||
-                        Config::ToggleModeGamePad == 2 && DoublePressDetectorGamepad && a_event->JustPressed()) {
+                        Config::ToggleModeGamePad == 2 && DoublePressDetectorGamepad && a_event->QJustPressed()) {
                         WindowManager::Open();
                         return true;
                     };

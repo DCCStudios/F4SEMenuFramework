@@ -81,11 +81,24 @@ namespace FallUIHudEditor {
     static void EnsureTranslationsLoaded() {
         if (s_trLoaded) return;
         s_trLoaded = true;
-        // The editor ships its own translation file next to the importable
-        // layouts. English only for now (the original picks the game language).
-        auto path = fs::current_path() / "Data" / "Interface" / "FallUI HUD" /
-                    "Translation" / "Translate_en.txt";
-        s_editorTr = MCMTranslation::LoadFile(path);
+        // The editor ships its own translation files next to the importable
+        // layouts. LoadDirectory picks Translate_en.txt as the base and
+        // overlays Translate_<game language>.txt per key — the same selection
+        // the original FallUI editor makes from the game language.
+        auto dir = fs::current_path() / "Data" / "Interface" / "FallUI HUD" / "Translation";
+        s_editorTr = MCMTranslation::LoadDirectory(dir);
+        if (s_editorTr.empty()) {
+            // Directory enumeration can fail under MO2's virtual filesystem —
+            // fall back to opening the known filenames directly.
+            s_editorTr = MCMTranslation::LoadFile(dir / "Translate_en.txt");
+            if (MCMTranslation::GetLanguage() != "en") {
+                auto langMap = MCMTranslation::LoadFile(
+                    dir / ("Translate_" + MCMTranslation::GetLanguage() + ".txt"));
+                for (auto& [k, v] : langMap) {
+                    s_editorTr[k] = std::move(v);
+                }
+            }
+        }
     }
 
     // Resolve "$Key" / "${Key}" tokens through the FallUI HUD translation file.
@@ -1753,18 +1766,12 @@ namespace FallUIHudEditor {
 
     // Colors -----------------------------------------------------------
 
-    // The vendored CommonLibF4 doesn't wrap HUDMenuUtils, so call the engine
-    // function directly. OG address-library ID 34363 (NG equivalent 2248840),
-    // cross-checked against two independent CommonLibF4 forks in PluginTemplate.
-    static RE::NiColor CallGetGameplayHUDColor() {
-        using func_t = RE::NiColor (*)();
-        static REL::Relocation<func_t> func{ REL::ID(34363) };
-        return func();
-    }
-
     static int GameHudColorRGB() {
         // Match the game's current HUD color when available (COLOR_HUD slot).
-        RE::NiColor c = CallGetGameplayHUDColor();
+        // The multi-runtime CommonLibF4 wraps this with per-runtime IDs
+        // ({34363 OG, 2248840 NG/AE} — verified present in every address
+        // library bin from 1.10.163 through 1.11.221).
+        RE::NiColor c = RE::HUDMenuUtils::GetGameplayHUDColor();
         auto ch = [](float v) { return std::clamp(static_cast<int>(v * 255.0f), 0, 255); };
         return (ch(c.r) << 16) | (ch(c.g) << 8) | ch(c.b);
     }

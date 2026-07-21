@@ -78,7 +78,10 @@ namespace
         if (!root->GetVariable(std::addressof(url), "root.loaderInfo.url") || !url.IsString()) {
             return true;
         }
-        if (url.GetString() != kHostSWF) {
+        // GetString() returns const char* in the multi-runtime CommonLibF4
+        // (the old fork returned std::string_view) — compare CONTENTS, not
+        // pointers, or the check fails for every movie and the button is gone.
+        if (std::string_view{ url.GetString() } != kHostSWF) {
             return true;
         }
 

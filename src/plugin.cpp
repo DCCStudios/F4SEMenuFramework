@@ -14,8 +14,32 @@
 namespace Plugin
 {
     static constexpr auto NAME = "F4SEMenuFramework"sv;
-    static constexpr auto VERSION = REL::Version{ 3, 1, 0 };
+    static constexpr auto VERSION = REL::Version{ 3, 3, 0 };
 }
+
+// Version data consumed by the NG/AE F4SE loaders (0.7.x reads the exported
+// F4SEPlugin_Version structure instead of calling F4SEPlugin_Query). The
+// address-independence bits tell it we resolve everything through the Address
+// Library, so any 1.10.980+ runtime with a matching version-*.bin may load us.
+// OG F4SE (0.6.23) ignores this export and uses F4SEPlugin_Query below.
+F4SE_PLUGIN_VERSION = []() noexcept {
+    F4SE::PluginVersionData v{};
+    v.PluginVersion({ 3, 3, 0, 0 });
+    v.PluginName("F4SEMenuFramework");
+    v.AuthorName("SkyrimThiago");
+    v.UsesAddressLibraryNG(true);  // 1.10.980 / 1.10.984
+    v.UsesAddressLibraryAE(true);  // 1.11.137 and later
+    v.UsesSigScanning(false);
+    v.IsLayoutDependentNG(true);
+    v.IsLayoutDependentAE(true);
+    v.CompatibleVersions({
+        F4SE::RUNTIME_1_10_163,
+        F4SE::RUNTIME_1_10_980,
+        F4SE::RUNTIME_1_10_984,
+        F4SE::RUNTIME_LATEST,
+    });
+    return v;
+}();
 
 void MessageCallback(F4SE::MessagingInterface::Message* msg)
 {
@@ -68,9 +92,18 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f
 {
     SetupLog();
     logger::info("{} v{} loading", Plugin::NAME, Plugin::VERSION.string());
+    {
+        const auto gameVer = REX::FModule::GetExecutingModule().GetFileVersion();
+        const char* slot =
+            REX::FModule::IsRuntimeOG() ? "OG" :
+            REX::FModule::IsRuntimeNG() ? "NG" : "AE";
+        logger::info("Game runtime {} -> {} address slot", gameVer.string(), slot);
+    }
 
-    F4SE::Init(a_f4se);
-    F4SE::AllocTrampoline(128);
+    // log = false: SetupLog() above already installed our spdlog default
+    // logger; CommonLib's REX layer logs through the same default logger.
+    // trampoline = true replaces the old F4SE::AllocTrampoline(128).
+    F4SE::Init(a_f4se, { .log = false, .trampoline = true, .trampolineSize = 128 });
 
     auto* messaging = F4SE::GetMessagingInterface();
     if (!messaging || !messaging->RegisterListener(MessageCallback)) {

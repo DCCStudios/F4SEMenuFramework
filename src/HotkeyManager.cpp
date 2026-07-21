@@ -230,8 +230,21 @@ std::vector<std::string> HotkeyManager::GetConflicts(unsigned int scanCode, cons
     // Scan code 0 means "unbound" — unbound hotkeys never conflict.
     if (scanCode == 0) return conflicts;
     std::string exclude = excludeId ? std::string(excludeId) : "";
+
+    // Numeric codes are only comparable within one device: keyboard/mouse
+    // code 256 (left mouse button) is unrelated to gamepad config code 256
+    // (LB). Compare against entries on the same device as the excluded id's
+    // entry (keyboard when unknown).
+    HotkeyDevice device = HotkeyDevice::Keyboard;
+    if (!exclude.empty()) {
+        auto it = idToHandle.find(exclude);
+        if (it != idToHandle.end()) {
+            device = entriesByHandle[it->second].device;
+        }
+    }
+
     for (auto& [handle, entry] : entriesByHandle) {
-        if (entry.scanCode == scanCode && entry.id != exclude) {
+        if (entry.device == device && entry.scanCode == scanCode && entry.id != exclude) {
             conflicts.push_back(entry.id);
         }
     }

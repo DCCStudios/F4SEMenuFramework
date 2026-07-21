@@ -345,15 +345,23 @@ static void ImGui_ImplDX11_CreateFontsTexture()
         bd->pd3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
         IM_ASSERT(pTexture != nullptr);
 
-        // Create texture view
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-        ZeroMemory(&srvDesc, sizeof(srvDesc));
-        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Texture2D.MipLevels = desc.MipLevels;
-        srvDesc.Texture2D.MostDetailedMip = 0;
-        bd->pd3dDevice->CreateShaderResourceView(pTexture, &srvDesc, &bd->pFontTextureView);
-        pTexture->Release();
+        // PATCHED for F4SEMenuFramework: CreateTexture2D can legitimately fail
+        // (e.g. an oversized font atlas exceeding the 16384-px D3D11 limit).
+        // IM_ASSERT is compiled out in release builds, so without this guard
+        // the null pointer crashed the game inside pTexture->Release().
+        // Text renders blank in that case instead of taking the process down.
+        if (pTexture != nullptr)
+        {
+            // Create texture view
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+            ZeroMemory(&srvDesc, sizeof(srvDesc));
+            srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MipLevels = desc.MipLevels;
+            srvDesc.Texture2D.MostDetailedMip = 0;
+            bd->pd3dDevice->CreateShaderResourceView(pTexture, &srvDesc, &bd->pFontTextureView);
+            pTexture->Release();
+        }
     }
 
     // Store our identifier

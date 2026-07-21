@@ -8,7 +8,13 @@
 #include <mutex>
 #include <memory>
 #include <set>
+#include <unordered_set>
 #include <SimpleIni.h>
+
+// The vendored CommonLibF4 declares this interface's destructor but never
+// defines it (the engine's own subclasses carry their own vtables); we derive
+// PropertyReadCallback from it below, so this DLL must supply the definition.
+RE::BSScript::IStackCallbackFunctor::~IStackCallbackFunctor() = default;
 
 namespace MCMValueProvider {
 
@@ -21,6 +27,29 @@ namespace MCMValueProvider {
     // never changed must never be touched.
     static std::set<std::string> s_dirtyMods;
     static std::mutex s_mutex;
+
+    // Exception containment: the provider's public entries run on the render
+    // thread inside the D3D present hook, where an escaped C++ exception has
+    // no handler on the stack and terminates the process with nothing logged
+    // (observed 2026-07-20: CTD opening NAC X's page). Each entry catches,
+    // logs the offending source ONCE through this helper, and degrades to an
+    // error result instead of unwinding out of the plugin.
+    static void LogProviderException(const char* op, const std::string& modName,
+                                     const MCMConfigParser::ValueSource& source,
+                                     const char* what) {
+        static std::mutex s_onceMutex;
+        static std::unordered_set<std::string> s_reported;
+        const std::string key = std::string(op) + "|" + modName + "|" + source.sourceForm +
+                                "|" + source.settingName + "|" + source.propertyName;
+        {
+            std::lock_guard lock(s_onceMutex);
+            if (!s_reported.insert(key).second) return;
+        }
+        logger::error(
+            "[MCMValueProvider] EXCEPTION in {} (mod='{}', sourceForm='{}', setting='{}', property='{}', type={}): {}",
+            op, modName, source.sourceForm, source.settingName, source.propertyName,
+            static_cast<int>(source.type), what);
+    }
 
     // Loads the layered settings INI for one mod into a fresh CSimpleIniA.
     // Layer order (later loads override earlier keys):
@@ -406,42 +435,25 @@ namespace MCMValueProvider {
 
     // MCM configs frequently omit "scriptName" for PropertyValue sources (the
     // real MCM resolves the script attached to the form automatically). The
-    // fork of CommonLibF4 we build against doesn't expose the VM's attached-
-    // scripts table as a member, but its layout is stable: verified identical
-    // (lock @ 0xBDF8, map @ 0xBE00) in both the pre-NG (1.10.163) and post-NG
-    // (1.10.980+) CommonLibF4 definitions of BSScript::Internal::VirtualMachine.
-    static constexpr std::ptrdiff_t VM_ATTACHED_SCRIPTS_LOCK_OFFSET = 0xBDF8;
-    static constexpr std::ptrdiff_t VM_ATTACHED_SCRIPTS_MAP_OFFSET  = 0xBE00;
-
-    // Engine's Internal::AttachedScript = BSTPointerAndFlags<BSTSmartPointer<Object>, 1>:
-    // an Object* whose low bit is a flag. Mask the low bits to recover the pointer
-    // (objects are heap-allocated, so at least 8-byte aligned).
-    struct RawAttachedScript {
-        std::uintptr_t bits;
-        [[nodiscard]] RE::BSScript::Object* get() const {
-            return reinterpret_cast<RE::BSScript::Object*>(bits & ~std::uintptr_t(7));
-        }
-    };
-    static_assert(sizeof(RawAttachedScript) == 0x8);
-
-    using AttachedScriptsMap =
-        RE::BSTHashMap<std::uint64_t, RE::BSTSmallSharedArray<RawAttachedScript>>;
+    // multi-runtime CommonLibF4 exposes the VM's attached-scripts table as a
+    // real member (attachedScriptsLock @ 0xBDF8, attachedScripts @ 0xBE00 —
+    // same layout we previously reached via hand-verified raw offsets on both
+    // the 1.10.163 and 1.10.980+ VirtualMachine definitions).
 
     // Returns strong references to every script object bound to the handle.
     static std::vector<RE::BSTSmartPointer<RE::BSScript::Object>> GetObjectsForHandle(
         RE::BSScript::IVirtualMachine* vmRaw, std::uint64_t handle)
     {
         std::vector<RE::BSTSmartPointer<RE::BSScript::Object>> result;
-        auto* base = reinterpret_cast<std::byte*>(vmRaw);
-        auto* lock = reinterpret_cast<RE::BSSpinLock*>(base + VM_ATTACHED_SCRIPTS_LOCK_OFFSET);
-        auto* map  = reinterpret_cast<AttachedScriptsMap*>(base + VM_ATTACHED_SCRIPTS_MAP_OFFSET);
+        // GameVM's impl is always the concrete Internal::VirtualMachine.
+        auto* vm = static_cast<RE::BSScript::Internal::VirtualMachine*>(vmRaw);
 
-        lock->lock();
+        vm->attachedScriptsLock.lock();
         // Layout sanity check — a wildly implausible element count means the
-        // offsets don't match this runtime, so bail rather than walk garbage.
-        if (map->size() < 0x100000) {
-            auto it = map->find(handle);
-            if (it != map->end()) {
+        // layout doesn't match this runtime, so bail rather than walk garbage.
+        if (vm->attachedScripts.size() < 0x100000) {
+            auto it = vm->attachedScripts.find(handle);
+            if (it != vm->attachedScripts.end()) {
                 for (const auto& raw : it->second) {
                     if (auto* obj = raw.get(); obj) {
                         result.emplace_back(obj);  // BSTSmartPointer ctor IncRefs
@@ -451,7 +463,7 @@ namespace MCMValueProvider {
         } else {
             logger::warn("[MCMValueProvider] attachedScripts layout sanity check failed — skipping script auto-resolution");
         }
-        lock->unlock();
+        vm->attachedScriptsLock.unlock();
         return result;
     }
 
@@ -575,6 +587,10 @@ namespace MCMValueProvider {
             st.done = true;
         };
 
+        // Runs on the render thread; an escaped exception here is fatal to the
+        // whole game (no handler between us and the D3D present hook).
+        try {
+
         auto* form = ResolveFormFromSourceForm(source.sourceForm);
         if (!form) {
             storeFailure(ProviderStatus::FormNotLoaded,
@@ -613,6 +629,14 @@ namespace MCMValueProvider {
 
         storeFailure(ProviderStatus::PropertyMissing,
             "Property '" + source.propertyName + "' not found on any script attached to " + source.sourceForm);
+
+        } catch (const std::exception& e) {
+            LogProviderException("RequestPropertyRead", requestKey, source, e.what());
+            storeFailure(ProviderStatus::Error, "Exception while dispatching property read (see log)");
+        } catch (...) {
+            LogProviderException("RequestPropertyRead", requestKey, source, "<non-std exception>");
+            storeFailure(ProviderStatus::Error, "Exception while dispatching property read (see log)");
+        }
     }
 
     bool TryTakePropertyResult(const std::string& requestKey, ValueResult& out) {
@@ -722,31 +746,42 @@ namespace MCMValueProvider {
     // --- Public API ---
 
     ValueResult GetValue(const std::string& modName, const MCMConfigParser::ValueSource& source) {
-        switch (source.type) {
-            case MCMConfigParser::SourceType::ModSettingBool:
-            case MCMConfigParser::SourceType::ModSettingInt:
-            case MCMConfigParser::SourceType::ModSettingFloat:
-            case MCMConfigParser::SourceType::ModSettingString:
-                return GetModSetting(modName, source);
+        try {
+            switch (source.type) {
+                case MCMConfigParser::SourceType::ModSettingBool:
+                case MCMConfigParser::SourceType::ModSettingInt:
+                case MCMConfigParser::SourceType::ModSettingFloat:
+                case MCMConfigParser::SourceType::ModSettingString:
+                    return GetModSetting(modName, source);
 
-            case MCMConfigParser::SourceType::GlobalValue:
-                return GetGlobalValue(source);
+                case MCMConfigParser::SourceType::GlobalValue:
+                    return GetGlobalValue(source);
 
-            case MCMConfigParser::SourceType::PropertyValueBool:
-            case MCMConfigParser::SourceType::PropertyValueInt:
-            case MCMConfigParser::SourceType::PropertyValueFloat:
-            case MCMConfigParser::SourceType::PropertyValueString:
-                return GetPropertyValue(source);
+                case MCMConfigParser::SourceType::PropertyValueBool:
+                case MCMConfigParser::SourceType::PropertyValueInt:
+                case MCMConfigParser::SourceType::PropertyValueFloat:
+                case MCMConfigParser::SourceType::PropertyValueString:
+                    return GetPropertyValue(source);
 
-            default: {
-                ValueResult r;
-                r.stringVal = source.defaultValue;
-                return r;
+                default: {
+                    ValueResult r;
+                    r.stringVal = source.defaultValue;
+                    return r;
+                }
             }
+        } catch (const std::exception& e) {
+            LogProviderException("GetValue", modName, source, e.what());
+        } catch (...) {
+            LogProviderException("GetValue", modName, source, "<non-std exception>");
         }
+        ValueResult r;
+        r.status = ProviderStatus::Error;
+        r.statusMessage = "Exception while reading value (see log)";
+        return r;
     }
 
     ProviderStatus SetBool(const std::string& modName, const MCMConfigParser::ValueSource& source, bool val) {
+        try {
         switch (source.type) {
             case MCMConfigParser::SourceType::ModSettingBool:
                 return SetModSetting(modName, source, val ? "1" : "0");
@@ -774,9 +809,17 @@ namespace MCMValueProvider {
             default:
                 return ProviderStatus::Error;
         }
+        } catch (const std::exception& e) {
+            LogProviderException("SetBool", modName, source, e.what());
+            return ProviderStatus::Error;
+        } catch (...) {
+            LogProviderException("SetBool", modName, source, "<non-std exception>");
+            return ProviderStatus::Error;
+        }
     }
 
     ProviderStatus SetInt(const std::string& modName, const MCMConfigParser::ValueSource& source, int val) {
+        try {
         switch (source.type) {
             case MCMConfigParser::SourceType::ModSettingInt:
                 return SetModSetting(modName, source, std::to_string(val));
@@ -790,9 +833,17 @@ namespace MCMValueProvider {
             default:
                 return ProviderStatus::Error;
         }
+        } catch (const std::exception& e) {
+            LogProviderException("SetInt", modName, source, e.what());
+            return ProviderStatus::Error;
+        } catch (...) {
+            LogProviderException("SetInt", modName, source, "<non-std exception>");
+            return ProviderStatus::Error;
+        }
     }
 
     ProviderStatus SetFloat(const std::string& modName, const MCMConfigParser::ValueSource& source, float val) {
+        try {
         switch (source.type) {
             case MCMConfigParser::SourceType::ModSettingFloat:
                 return SetModSetting(modName, source, std::to_string(val));
@@ -806,9 +857,17 @@ namespace MCMValueProvider {
             default:
                 return ProviderStatus::Error;
         }
+        } catch (const std::exception& e) {
+            LogProviderException("SetFloat", modName, source, e.what());
+            return ProviderStatus::Error;
+        } catch (...) {
+            LogProviderException("SetFloat", modName, source, "<non-std exception>");
+            return ProviderStatus::Error;
+        }
     }
 
     ProviderStatus SetString(const std::string& modName, const MCMConfigParser::ValueSource& source, const std::string& val) {
+        try {
         switch (source.type) {
             case MCMConfigParser::SourceType::ModSettingString:
                 return SetModSetting(modName, source, val);
@@ -819,6 +878,13 @@ namespace MCMValueProvider {
             }
             default:
                 return ProviderStatus::Error;
+        }
+        } catch (const std::exception& e) {
+            LogProviderException("SetString", modName, source, e.what());
+            return ProviderStatus::Error;
+        } catch (...) {
+            LogProviderException("SetString", modName, source, "<non-std exception>");
+            return ProviderStatus::Error;
         }
     }
 

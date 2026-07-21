@@ -10,6 +10,7 @@
 #include "MCM/MCMTranslation.h"
 #include "Config.h"
 #include "Event.h"
+#include "FontManager.h"
 
 namespace MCMRegistry {
 
@@ -18,22 +19,33 @@ namespace MCMRegistry {
 
     // Apply translation resolution and HTML stripping to all user-visible strings
     // in a parsed MCM config
-    static void ApplyTranslations(MCMConfigParser::MCMModConfig& config,
-                                  const MCMTranslation::TranslationMap& map) {
+    // Resolves all display strings and returns the set of non-Latin scripts
+    // (MCMTranslation::ScriptMask bits) seen in the results, so the caller
+    // can request matching font coverage. Detection runs on the RESOLVED
+    // text — that's exactly what ImGui will be asked to draw, regardless of
+    // which file or language the value came from.
+    static unsigned int ApplyTranslations(MCMConfigParser::MCMModConfig& config,
+                                          const MCMTranslation::TranslationMap& map) {
+        unsigned int scripts = 0;
+        auto resolve = [&](std::string& text) {
+            text = MCMTranslation::ResolveAndStrip(text, map);
+            scripts |= MCMTranslation::DetectScripts(text);
+        };
+
         // Resolve display name
-        config.displayName = MCMTranslation::ResolveAndStrip(config.displayName, map);
+        resolve(config.displayName);
 
         // Resolve page names and control strings
         for (auto& page : config.pages) {
-            page.pageDisplayName = MCMTranslation::ResolveAndStrip(page.pageDisplayName, map);
+            resolve(page.pageDisplayName);
 
             for (auto& ctrl : page.controls) {
-                ctrl.text = MCMTranslation::ResolveAndStrip(ctrl.text, map);
-                ctrl.help = MCMTranslation::ResolveAndStrip(ctrl.help, map);
+                resolve(ctrl.text);
+                resolve(ctrl.help);
 
                 // Resolve option labels
                 for (auto& opt : ctrl.options) {
-                    opt.text = MCMTranslation::ResolveAndStrip(opt.text, map);
+                    resolve(opt.text);
                 }
             }
         }
@@ -41,9 +53,11 @@ namespace MCMRegistry {
         // Resolve shared option labels
         for (auto& [key, options] : config.sharedOptions) {
             for (auto& opt : options) {
-                opt.text = MCMTranslation::ResolveAndStrip(opt.text, map);
+                resolve(opt.text);
             }
         }
+
+        return scripts;
     }
 
     // Fired on framework menu open/close. On open, refresh everything the
@@ -91,7 +105,20 @@ namespace MCMRegistry {
             return;
         }
 
-        // Step 3: Load global translations from Data/Interface/Translations/
+        // Step 3: Load global translations from Data/Interface/Translations/.
+        // Language comes from Fallout4Custom.ini / Fallout4.ini / GetINISetting
+        // (Custom.ini first — GetINISetting alone often stays on Fallout4.ini's
+        // "en" even when the player set sLanguage in Custom.ini).
+        {
+            const auto* langSetting = RE::GetINISetting("sLanguage:General");
+            const std::string fromSetting = langSetting ? std::string(langSetting->GetString()) : "";
+            const std::string lang = MCMTranslation::ResolveGameLanguage(fromSetting);
+            MCMTranslation::SetLanguage(lang);
+            logger::info("[MCMRegistry] Game language '{}' (GetINISetting reported '{}') — "
+                         "loading translations with English fallback for missing keys",
+                MCMTranslation::GetLanguage(),
+                fromSetting.empty() ? "<unset>" : fromSetting);
+        }
         MCMTranslation::TranslationMap globalTranslations;
         auto interfaceTransDir = std::filesystem::current_path() / "Data" / "Interface" / "Translations";
         if (std::filesystem::exists(interfaceTransDir)) {
@@ -111,6 +138,7 @@ namespace MCMRegistry {
         MCMKeybindStore::Load();
 
         // Step 5: Parse configs and register widgets + keybinds
+        unsigned int scriptMask = 0;
         for (const auto& mod : mods) {
             try {
                 // Build per-mod translation map: mod-specific entries override globals
@@ -130,6 +158,19 @@ namespace MCMRegistry {
                 for (auto& [k, v] : interfaceTranslations) {
                     modMap[k] = std::move(v);
                 }
+                // Confirm the active-language file is visible on the same path
+                // LoadForMod uses (so "still English" can be distinguished from
+                // "file not found" — many mods ship *_es.txt as English copies).
+                if (MCMTranslation::GetLanguage() != "en") {
+                    const auto langFile =
+                        std::filesystem::current_path() / "Data" / "Interface" / "Translations" /
+                        (mod.modName + "_" + MCMTranslation::GetLanguage() + ".txt");
+                    std::ifstream probe(langFile);
+                    if (probe.is_open()) {
+                        logger::info("[MCMRegistry] Using translation file '{}' for '{}' ({} keys in merged map)",
+                            langFile.filename().string(), mod.modName, interfaceTranslations.size());
+                    }
+                }
 
                 auto config = MCMConfigParser::Parse(mod.configPath, mod.modName);
                 if (!config.has_value()) {
@@ -137,8 +178,9 @@ namespace MCMRegistry {
                     continue;
                 }
 
-                // Apply translation resolution + HTML stripping
-                ApplyTranslations(*config, modMap);
+                // Apply translation resolution + HTML stripping, collecting
+                // which non-Latin scripts the resolved text actually uses.
+                scriptMask |= ApplyTranslations(*config, modMap);
 
                 // Register keybinds (if keybinds.json exists)
                 if (!mod.keybindsPath.empty()) {
@@ -158,6 +200,14 @@ namespace MCMRegistry {
 
         s_active = (s_loadedModCount > 0);
         logger::info("[MCMRegistry] MCM compat initialized: {} mod(s) loaded successfully", s_loadedModCount);
+
+        // Make sure the font atlas can draw every script the loaded text
+        // uses — the language setting alone misses translation mods that
+        // ship non-Latin text in *_en.txt files (e.g. Korean packs on an
+        // sLanguage=en game). No-op when coverage already suffices.
+        if (scriptMask != 0) {
+            FontManager::RequestScriptCoverage(scriptMask);
+        }
 
         // Coexistence reverse-sync: when the overlay opens, pick up anything
         // the user changed through the NATIVE MCM since we last looked —

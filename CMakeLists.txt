@@ -44,8 +44,8 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_DEBUG OFF)
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
-# Boost MODULE finder from CommonLibF4 umbrella
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../PluginTemplate/CommonLibF4/cmake")
+# (Boost module path from the old Ryan CommonLibF4 umbrella no longer needed;
+# the vendored multi-runtime fork under extern/ has no Boost dependency.)
 
 # ---------------------------------------------------- #
 #                      Resources                       #
@@ -71,8 +71,10 @@ add_custom_target(Resource ALL DEPENDS ${RESOURCE_OUTPUT})
 #                  CommonLibF4 Setup                   #
 # ---------------------------------------------------- #
 
+# Multi-runtime CommonLibF4 (Dear-Modding fork, vendored). One DLL supports
+# OG 1.10.163 / NG 1.10.980-984 / AE 1.11.x via runtime-indexed REL::IDs.
 if (NOT TARGET CommonLibF4)
-    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../PluginTemplate/CommonLibF4/CommonLibF4" CommonLibF4)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/commonlibf4" CommonLibF4)
 endif()
 
 # ---------------------------------------------------- #

@@ -51,6 +51,11 @@ namespace MCMKeybindStore {
         { VK_DIVIDE,   0xB5 }, { VK_SNAPSHOT, 0xB7 }, { VK_PAUSE, 0xC5 },
         { VK_LWIN,     0xDB }, { VK_RWIN,   0xDC }, { VK_APPS,   0xDD },
         { VK_NUMLOCK,  0x45 },
+        // Mouse buttons: the real MCM stores these as Windows VK codes
+        // (1/2/4/5/6); the framework's binding space uses the F4SE/Papyrus
+        // keycodes 256-260, so mouse binds round-trip through Keybinds.json.
+        { VK_LBUTTON,  256 }, { VK_RBUTTON, 257 }, { VK_MBUTTON, 258 },
+        { VK_XBUTTON1, 259 }, { VK_XBUTTON2, 260 },
     };
 
     unsigned int VKToDIK(unsigned int vk) {

@@ -22,11 +22,12 @@ Any F4SE plugin can register menu pages, popout windows, HUD overlays, input cal
 
 | Game | Supported? |
 |------|------------|
-| Fallout 4 **1.10.163** (last pre–next-gen / “old-gen”) | Yes — primary target |
-| Fallout 4 **1.10.162** | Should load (runtime floor in `F4SEPlugin_Query`) |
-| Next-Gen (1.10.980 / 1.10.984), Game Pass 1.11.x, FO4 VR | **No** |
+| Fallout 4 **1.10.163** (last pre–next-gen / “old-gen”) | Yes |
+| Fallout 4 **1.10.980 / 1.10.984** (Next-Gen) | Yes |
+| Fallout 4 **1.11.x** (current patch line, verified through 1.11.221) | Yes |
+| Game Pass / Microsoft Store, FO4 VR | **No** (no F4SE) |
 
-Requires **F4SE** and **Address Library for F4SE Plugins** matching your game version.
+One DLL covers all supported runtimes — the correct addresses are selected at load time from the game's version. Requires **F4SE** and **Address Library for F4SE Plugins** matching your game version.
 
 ---
 

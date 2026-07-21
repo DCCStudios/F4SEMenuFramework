@@ -96,6 +96,15 @@ namespace MCMWidgetRenderer {
     static void RenderPage(const MCMConfigParser::MCMPage& page, ModRenderContext& ctx);
     static void RenderControl(const MCMConfigParser::MCMControl& ctrl, ModRenderContext& ctx);
 
+    // Exception containment note: an uncaught C++ exception anywhere in the
+    // translated-MCM render path unwinds through ImGui and the D3D present
+    // hook and takes the whole game down (observed 2026-07-20: clicking NAC X
+    // -> WER APPCRASH e06d7363 with nothing in any log, because no frame
+    // between the throw site and the OS had a handler). Guards live at the
+    // non-ImGui boundaries — MCMValueProvider entries, MCMPapyrusDispatch,
+    // MCMPapyrusAPI's event dispatch and the SWF image loader — where catching
+    // cannot leave ImGui's push/pop stacks unbalanced.
+
     // Callback for display-only hotkey registrations (hotkey controls that
     // have no keybinds.json action — the binding is shown/set but fires nothing).
     static void __stdcall NoOpHotkeyCallback() {}
@@ -223,7 +232,7 @@ namespace MCMWidgetRenderer {
         }
 
         ResolvedImage result;
-        if (!libName.empty() && !className.empty()) {
+        if (!libName.empty() && !className.empty()) try {
             const auto folder = MCMScanner::GetScanBasePath() / libName;
 
             // 1) Embedded bitmap in the library SWF itself. Mods whose banner
@@ -255,6 +264,14 @@ namespace MCMWidgetRenderer {
             } else {
                 logger::debug("[MCM] No renderable content for '{}' in {} (lib.swf/logo.swf)", className, libName);
             }
+        } catch (const std::exception& e) {
+            // A corrupt/hostile SWF must never take the game down. The miss is
+            // cached below like any other, so this only ever logs once.
+            logger::error("[MCM] EXCEPTION loading image '{}' from {}: {}", className, libName, e.what());
+            result = ResolvedImage{};
+        } catch (...) {
+            logger::error("[MCM] EXCEPTION (non-std) loading image '{}' from {}", className, libName);
+            result = ResolvedImage{};
         }
 
         s_cache[key] = result;
@@ -622,12 +639,26 @@ namespace MCMWidgetRenderer {
     // ------------------------------------------------------------------
     // Hotkey capture — polls raw input while capture mode is active.
     // Keyboard: VK scan via GetAsyncKeyState -> DIK conversion (MapVirtualKey).
+    // Mouse: press edges via ImGui (F4SE keycodes 256-260), like the real MCM.
     // ESC cancels, TAB unbinds (mirrors the real MCM's remap flow where
     // Esc = cancel and Tab = unbind).
     // ------------------------------------------------------------------
 
     static void ProcessHotkeyCapture(ControlState& state) {
         if (!s_captureActive) return;
+
+        // Applies a captured code: conflict-check, bind, notify.
+        auto applyBinding = [&](unsigned int code) {
+            auto conflicts = HotkeyManager::GetConflicts(code, s_captureHotkeyId.c_str());
+            if (!conflicts.empty()) {
+                logger::info("[MCMWidgetRenderer] Hotkey '{}' now shares code 0x{:X} with {} other binding(s)",
+                    s_captureHotkeyId, code, conflicts.size());
+            }
+            HotkeyManager::SetBinding(s_captureHotkeyId.c_str(), code);
+            state.intVal = static_cast<int>(code);
+            s_captureActive = false;
+            MCMPapyrusAPI::DispatchSettingChanged(s_captureModName, s_captureStateKey);
+        };
 
         // ESC — cancel capture, keep the old binding
         if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
@@ -644,9 +675,29 @@ namespace MCMWidgetRenderer {
             return;
         }
 
+        // Mouse buttons — press edges only. The LEFT button is deliberately
+        // not capturable: clicking is how the capture UI itself is operated,
+        // so accepting it would instantly self-bind on any click (and a
+        // left-mouse gameplay bind is almost never what the user meant).
+        // A left-button bind made in the real MCM still imports and fires.
+        // Codes follow the F4SE/Papyrus convention: 256 = left ... 260 = X2.
+        static constexpr struct { int imguiBtn; unsigned int code; } kMouseButtons[] = {
+            { ImGuiMouseButton_Right, 257 },
+            { ImGuiMouseButton_Middle, 258 },
+            { 3, 259 },  // X1 / "Mouse 4"
+            { 4, 260 },  // X2 / "Mouse 5"
+        };
+        for (const auto& mb : kMouseButtons) {
+            if (ImGui::IsMouseClicked(mb.imguiBtn, false)) {
+                applyBinding(mb.code);
+                return;
+            }
+        }
+
         // Scan the useful VK range for a fresh key press and translate to DIK.
-        // Skip mouse buttons (VK 1-6) and modifier-only virtual keys that don't
-        // map to scan codes cleanly.
+        // Mouse buttons (VK 1-6) were handled above via press edges; skip them
+        // here along with modifier-only virtual keys that don't map to scan
+        // codes cleanly.
         for (int vk = 0x08; vk <= 0xFE; ++vk) {
             if (vk == VK_ESCAPE || vk == VK_TAB) continue;
             if (!(GetAsyncKeyState(vk) & 0x8000)) continue;
@@ -672,18 +723,10 @@ namespace MCMWidgetRenderer {
                 default: break;
             }
 
-            // Conflict check: warn in the log but allow the bind, matching the
-            // real MCM which shows a conflict prompt and rebinds on confirm.
-            auto conflicts = HotkeyManager::GetConflicts(scan, s_captureHotkeyId.c_str());
-            if (!conflicts.empty()) {
-                logger::info("[MCMWidgetRenderer] Hotkey '{}' now shares scan code 0x{:X} with {} other binding(s)",
-                    s_captureHotkeyId, scan, conflicts.size());
-            }
-
-            HotkeyManager::SetBinding(s_captureHotkeyId.c_str(), scan);
-            state.intVal = static_cast<int>(scan);
-            s_captureActive = false;
-            MCMPapyrusAPI::DispatchSettingChanged(s_captureModName, s_captureStateKey);
+            // Conflict check happens inside applyBinding: warn in the log but
+            // allow the bind, matching the real MCM which shows a conflict
+            // prompt and rebinds on confirm.
+            applyBinding(scan);
             return;
         }
     }

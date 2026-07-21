@@ -21,6 +21,7 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include <chrono>
+#include <cstring>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -36,19 +37,130 @@ void Hooks::InstallInputHooks() {
 }
 
 // ---------------------------------------------------------------------------
-// CreateDeviceHook — write_call<5> on the D3D11CreateDeviceAndSwapChain call site
-// REL::ID(224250) + 0x419 is the CALL instruction inside the game's renderer init.
-// The IAT approach (REL::ID 254484) doesn't work because the game caches the
-// function pointer before our plugin loads. GunMover uses this same call site.
+// Version-independent import helpers
+//
+// The game module imports D3D11CreateDeviceAndSwapChain and ClipCursor and, at
+// static-init time (before F4SE plugins load), copies some import pointers into
+// its own globals — which is why a late IAT patch alone is not always enough.
+// FindGameImportSlots locates every 8-byte cell in the game module that holds
+// the resolved import address: the IAT slot itself plus any cached copies in
+// writable data. Overwriting all of them redirects every call path without an
+// Address Library ID, which keeps these hooks working on runtimes whose IDs
+// were never published (NG 1.10.980/984) and on future patches.
+// ---------------------------------------------------------------------------
+
+// Locates the game module's IAT slot for `dllName!funcName` (classic import
+// directory walk). Returns nullptr when the import isn't found.
+static std::uintptr_t* FindGameIATSlot(const char* dllName, const char* funcName) {
+    auto* base = reinterpret_cast<std::uint8_t*>(::GetModuleHandleW(nullptr));
+    if (!base) return nullptr;
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dir.VirtualAddress) return nullptr;
+
+    auto* desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress);
+    for (; desc->Name; ++desc) {
+        const char* modName = reinterpret_cast<const char*>(base + desc->Name);
+        if (_stricmp(modName, dllName) != 0) continue;
+
+        auto* thunkName = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->OriginalFirstThunk);
+        auto* thunkAddr = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->FirstThunk);
+        for (; thunkName->u1.AddressOfData; ++thunkName, ++thunkAddr) {
+            if (thunkName->u1.Ordinal & IMAGE_ORDINAL_FLAG) continue;
+            auto* import = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + thunkName->u1.AddressOfData);
+            if (std::strcmp(reinterpret_cast<const char*>(import->Name), funcName) == 0) {
+                return reinterpret_cast<std::uintptr_t*>(&thunkAddr->u1.Function);
+            }
+        }
+    }
+    return nullptr;
+}
+
+// Scans the game module's writable data sections for cached copies of a
+// resolved import address (globals the game filled at static-init time) and
+// replaces each with `replacement`. Returns the number of cells patched.
+static int PatchCachedImportPointers(std::uintptr_t importAddr, std::uintptr_t replacement) {
+    auto* base = reinterpret_cast<std::uint8_t*>(::GetModuleHandleW(nullptr));
+    if (!base || !importAddr) return 0;
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    auto* section = IMAGE_FIRST_SECTION(nt);
+
+    int patched = 0;
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+        // Cached import pointers live in initialized, writable data (.data);
+        // read-only sections hold the IAT (handled separately) and constants.
+        if (!(section->Characteristics & IMAGE_SCN_MEM_WRITE)) continue;
+        if (!(section->Characteristics & IMAGE_SCN_CNT_INITIALIZED_DATA)) continue;
+
+        auto* begin = reinterpret_cast<std::uintptr_t*>(base + section->VirtualAddress);
+        auto* end = reinterpret_cast<std::uintptr_t*>(
+            base + section->VirtualAddress + section->Misc.VirtualSize - sizeof(std::uintptr_t) + 1);
+        for (auto* p = begin; p < end; ++p) {
+            if (*p == importAddr) {
+                REL::WriteSafeData(reinterpret_cast<std::uintptr_t>(p), replacement);
+                ++patched;
+            }
+        }
+    }
+    return patched;
+}
+
+// ---------------------------------------------------------------------------
+// CreateDeviceHook — intercepts the game's D3D11CreateDeviceAndSwapChain call
+// so we can grab the real swap chain / device the moment they are created.
+//
+// Per-runtime strategy:
+//  - OG 1.10.163: write_call<5> on the CALL inside the renderer-init function,
+//    Address Library ID 224250 + 0x419 (proven in this project since 3.0).
+//  - AE 1.11.137+: same call site, ID 4492363 + 0x410 (GunMover's field-tested
+//    multi-runtime pair; both IDs verified present in every 1.11.x bin).
+//  - NG 1.10.980/984: those address libraries never received an ID for this
+//    function (4492363 is 1.11-only), so fall back to patching the import:
+//    the IAT slot plus every cached copy of the resolved pointer in .data.
 // ---------------------------------------------------------------------------
 
 void Hooks::CreateDeviceHook::install() {
-    REL::Relocation<std::uintptr_t> callSite{ REL::ID(224250), 0x419 };
-    auto& trampoline = F4SE::GetTrampoline();
-    originalFunc = reinterpret_cast<FnCreateDeviceAndSwapChain>(
-        trampoline.write_call<5>(callSite.address(), &thunk));
-    logger::info("D3D11CreateDeviceAndSwapChain call-site hook at {:X}, original={:X}",
-        callSite.address(), reinterpret_cast<std::uintptr_t>(originalFunc));
+    if (!REX::FModule::IsRuntimeNG()) {
+        // OG / AE: known call-site IDs. NG slot is a placeholder that is never
+        // resolved (REL aborts the process on a missing-ID lookup, so we must
+        // not even ask).
+        static const REL::ID kRendererInitFn{ 224250, 0, 4492363 };
+        const std::ptrdiff_t callOffset = REX::FModule::IsRuntimeOG() ? 0x419 : 0x410;
+        const std::uintptr_t callSite = kRendererInitFn.address() + callOffset;
+        auto& trampoline = REL::GetTrampoline();
+        originalFunc = reinterpret_cast<FnCreateDeviceAndSwapChain>(
+            trampoline.write_call<5>(callSite, &thunk));
+        logger::info("D3D11CreateDeviceAndSwapChain call-site hook at {:X}, original={:X}",
+            callSite, reinterpret_cast<std::uintptr_t>(originalFunc));
+        return;
+    }
+
+    // NG 1.10.980/984: import-pointer patching (no Address Library ID exists).
+    HMODULE d3d11 = ::GetModuleHandleW(L"d3d11.dll");
+    if (!d3d11) d3d11 = ::LoadLibraryW(L"d3d11.dll");
+    const auto realFn = d3d11
+        ? reinterpret_cast<std::uintptr_t>(::GetProcAddress(d3d11, "D3D11CreateDeviceAndSwapChain"))
+        : 0;
+    if (!realFn) {
+        logger::error("d3d11.dll!D3D11CreateDeviceAndSwapChain not resolvable — overlay disabled");
+        return;
+    }
+    originalFunc = reinterpret_cast<FnCreateDeviceAndSwapChain>(realFn);
+
+    int patched = 0;
+    if (auto* slot = FindGameIATSlot("d3d11.dll", "D3D11CreateDeviceAndSwapChain")) {
+        REL::WriteSafeData(reinterpret_cast<std::uintptr_t>(slot),
+            reinterpret_cast<std::uintptr_t>(&thunk));
+        ++patched;
+    }
+    patched += PatchCachedImportPointers(realFn, reinterpret_cast<std::uintptr_t>(&thunk));
+    if (patched > 0) {
+        logger::info("D3D11CreateDeviceAndSwapChain import hook installed on NG runtime ({} pointer(s) patched)", patched);
+    } else {
+        logger::error("No D3D11CreateDeviceAndSwapChain import pointers found on NG runtime — overlay disabled");
+    }
 }
 
 HRESULT __stdcall Hooks::CreateDeviceHook::thunk(
@@ -73,7 +185,7 @@ HRESULT __stdcall Hooks::CreateDeviceHook::thunk(
 
     auto* vtbl = reinterpret_cast<std::uintptr_t*>(*reinterpret_cast<std::uintptr_t*>(*ppSwapChain));
     PresentHook::originalPresent = reinterpret_cast<decltype(PresentHook::originalPresent)>(vtbl[8]);
-    REL::safe_write(reinterpret_cast<std::uintptr_t>(&vtbl[8]),
+    REL::WriteSafeData(reinterpret_cast<std::uintptr_t>(&vtbl[8]),
         reinterpret_cast<std::uintptr_t>(&PresentHook::thunk));
 
     logger::info("IDXGISwapChain::Present VTable hook installed on real swap chain");
@@ -87,19 +199,27 @@ HRESULT __stdcall Hooks::CreateDeviceHook::thunk(
 }
 
 // ---------------------------------------------------------------------------
-// ClipCursorHook — IAT hook on ClipCursor (REL::ID 641385)
+// ClipCursorHook — IAT hook on user32!ClipCursor
 // Both Shadow-Boost-FO4 and GunMover hook this to allow mouse freedom when
 // ImGui menus are open. Without this, the game constantly clips the cursor
 // to the game window, preventing interaction with ImGui widgets.
+//
+// The slot is now located by walking the game module's import table by name
+// instead of Address Library ID 641385 / 4823626 — same address on OG (it IS
+// what 641385 pointed at), but works on every runtime including NG 980/984,
+// whose address libraries never received the ID.
 // ---------------------------------------------------------------------------
 
 void Hooks::ClipCursorHook::install() {
-    REL::Relocation<std::uintptr_t> iatEntry{ REL::ID(641385) };
-    originalClipCursor = reinterpret_cast<FnClipCursor>(
-        *reinterpret_cast<std::uintptr_t*>(iatEntry.address()));
-    REL::safe_write(iatEntry.address(),
+    auto* slot = FindGameIATSlot("user32.dll", "ClipCursor");
+    if (!slot) {
+        logger::error("user32.dll!ClipCursor import not found in game module — cursor-unclip hook skipped");
+        return;
+    }
+    originalClipCursor = reinterpret_cast<FnClipCursor>(*slot);
+    REL::WriteSafeData(reinterpret_cast<std::uintptr_t>(slot),
         reinterpret_cast<std::uintptr_t>(&thunk));
-    logger::info("ClipCursor IAT hook installed at {:X}", iatEntry.address());
+    logger::info("ClipCursor IAT hook installed at {:X}", reinterpret_cast<std::uintptr_t>(slot));
 }
 
 BOOL __stdcall Hooks::ClipCursorHook::thunk(const RECT* lpRect) {
@@ -180,7 +300,9 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
         FontManager::fontSizes["Small"] = FontManager::LoadFonts(io, Config::FontSizeSmall);
         FontManager::fontSizes["Default"] = regular;
 
-        io.Fonts->Build();
+        // Degradation-aware build: retries with reduced CJK coverage if the
+        // atlas would exceed D3D11's texture size limit (was a CTD).
+        FontManager::BuildAtlasSafe(io);
 
         device->Release();
         context->Release();
@@ -376,6 +498,37 @@ LRESULT Hooks::WndProcHook::thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         // "down" if a menu opened before release; DispatchUp itself only fires
         // for entries whose down-press was actually dispatched.
         HotkeyManager::DispatchUp(scanCode);
+    }
+
+    // --- Mouse buttons as hotkeys ---
+    // The real MCM lets users bind mouse buttons; those live in the keyboard
+    // binding space above the DIK range using the F4SE/Papyrus keycode
+    // convention: 256 = left, 257 = right, 258 = middle, 259/260 = X1/X2.
+    // Same gating as keys: presses only dispatch during gameplay, releases
+    // always (so a press can't leave a SendEvent bind stuck "down").
+    {
+        unsigned int mouseCode = 0;
+        bool mouseDown = false;
+        switch (uMsg) {
+            case WM_LBUTTONDOWN: mouseCode = 256; mouseDown = true; break;
+            case WM_LBUTTONUP:   mouseCode = 256; break;
+            case WM_RBUTTONDOWN: mouseCode = 257; mouseDown = true; break;
+            case WM_RBUTTONUP:   mouseCode = 257; break;
+            case WM_MBUTTONDOWN: mouseCode = 258; mouseDown = true; break;
+            case WM_MBUTTONUP:   mouseCode = 258; break;
+            case WM_XBUTTONDOWN: mouseCode = (GET_XBUTTON_WPARAM(wParam) == XBUTTON1) ? 259 : 260; mouseDown = true; break;
+            case WM_XBUTTONUP:   mouseCode = (GET_XBUTTON_WPARAM(wParam) == XBUTTON1) ? 259 : 260; break;
+            default: break;
+        }
+        if (mouseCode != 0) {
+            if (mouseDown) {
+                if (!WindowManager::ShouldTheGameBePaused()) {
+                    HotkeyManager::Dispatch(mouseCode);
+                }
+            } else {
+                HotkeyManager::DispatchUp(mouseCode);
+            }
+        }
     }
 
     // --- Forward to ImGui and block game input when menu is active ---

@@ -2,6 +2,43 @@
 
 All notable changes to F4SE Menu Framework are documented in this file.
 
+## [3.3.0] — 2026-07-19
+
+Compatibility release: **one DLL now supports every mainstream Fallout 4 runtime** — Old-gen **1.10.163**, Next-Gen **1.10.980 / 1.10.984**, and the current **1.11.x** patch line (verified against address libraries up to 1.11.221). Requires the Address Library `version-*.bin` matching your game version, as before.
+
+### Multi-runtime support
+
+- **CommonLibF4 replaced** with the Dear-Modding multi-runtime fork (vendored under `extern/commonlibf4`, built through a CMake shim since upstream is xmake-only). Every `REL::ID` carries three slots — OG / NG / AE — selected at runtime from the game executable's file version.
+- **Dual loader support**: the DLL exports both the classic `F4SEPlugin_Query` (OG F4SE 0.6.23) and the `F4SEPlugin_Version` structure (NG/AE F4SE 0.7.x), with the address-library-independence flags set so future 1.11.x patches load without a plugin update as long as a matching Address Library exists.
+- **Version-independent hooks** wherever an Address Library ID doesn't exist across all runtimes:
+  - `ClipCursor` is now hooked by walking the game module's import table by name instead of Address Library ID 641385 — identical target on OG, and works on NG/AE where that ID was never published.
+  - `D3D11CreateDeviceAndSwapChain`: OG and AE keep the proven call-site hook (IDs 224250 / 4492363); NG 1.10.980/984 — whose address libraries have no ID for the renderer-init function — falls back to patching the import pointer (IAT slot plus any cached copies the game stored in `.data` at static-init time).
+- **Papyrus dispatch is ABI-aware per runtime**: NG/AE argument packs for `DispatchStaticCall` / `DispatchMethodCall` are plain C++ lambdas wrapped in `BSTThreadScrapFunction` (ABI-identical to those runtimes' `std::function`). OG 1.10.163 was built with the VS2013 toolchain whose `std::function` layout differs (32 bytes vs 64), so on OG the functor is constructed through the game's own engine helpers (IDs 445184 / 69733) — passing a modern `std::function` there read a garbage pointer and crashed (fixed a CTD when clicking MCM pages that fire external events, e.g. NAC X).
+- The VM attached-scripts table, HUD color lookup, and all other game-struct accesses now go through the fork's runtime-aware definitions instead of hand-verified raw offsets.
+
+### Localization
+
+- **Language-aware translations**: the MCM translation layer now reads the game's `sLanguage:General` setting and loads `*_<lang>.txt` translation files with per-key English fallback, instead of always loading English. Applies to global translations, per-mod probing, and the FallUI HUD editor's own translation files.
+- **Escape decoding**: literal `\n` / `\t` sequences in translation values are converted to real newlines/tabs, matching the game's Scaleform translator (fixes raw `\n` showing in descriptions).
+- **Glyph coverage**: the glyph ranges matching the game language (Cyrillic, CJK, Thai, Vietnamese, Greek; Latin Extended always) are baked into the ImGui font atlas automatically — the manual `Enable*` INI flags remain as overrides.
+- **Fallback fonts for missing scripts**: when the chosen UI font has no outlines for the needed script (e.g. Korean Hangul), a fallback font is merged in to fill only the missing glyphs — no more `?` boxes on CJK/Korean text, without changing the Latin look. Fallbacks are searched in `Data/F4SE/Plugins/Fonts/` first (ship `NotoSansKR-Regular.ttf`, `NotoSansSC-Regular.ttf`, `NotoSansJP-Regular.ttf`, `NotoSans-Regular.ttf` there to be self-contained, e.g. for Proton/Wine), then the Windows font directory (Malgun Gothic, Microsoft YaHei, Yu Gothic, Leelawadee, Segoe UI).
+- **Fixed a CTD with CJK-capable fonts**: selecting a font that actually contains Chinese/Japanese/Korean glyphs could bake an atlas taller than D3D11's 16384-px texture limit; `CreateTexture2D` failed and the DX11 backend crashed on the null texture (verified against a Buffout 4 crash log, and reproduced offline: full Chinese at the three UI sizes hit 8192x16426). Fixed threefold: CJK glyphs now bake at 1x oversample (halves their atlas footprint; full Chinese fits at 8192x8352), the atlas build retries with progressively reduced coverage (full -> common Chinese subset -> no CJK) until it fits, and the backend tolerates texture-creation failure (blank text instead of a crash) as a last line of defense.
+- **Legacy-codepage translation files** (e.g. Korean packs saved as ANSI/CP949 instead of UTF-8) are detected and converted to UTF-8 on load via the machine's ANSI codepage — previously every non-ASCII byte rendered as a U+FFFD replacement diamond.
+- **Content-driven glyph coverage**: after loading, the resolved MCM text is scanned for non-Latin scripts (Hangul, kana, ideographs, Cyrillic, Thai, Greek, Vietnamese) and the font atlas is rebuilt with matching ranges when needed. This covers translation packs that ship non-Latin text in `*_en.txt` files on an `sLanguage=en` game, which the language setting alone can't announce.
+- The left mouse button is excluded from hotkey capture (clicking is how the capture UI is operated, so it would instantly self-bind); left-button binds made in the real MCM still import and fire.
+
+### Mouse button keybinds
+
+- **MCM hotkey controls can bind mouse buttons** (left/right/middle/Mouse4/Mouse5), matching the real MCM. Capture accepts mouse presses, bindings dispatch from the game window's mouse messages, and Keybinds.json round-trips the real MCM's VK codes (1/2/4/5/6) so binds transfer between both systems.
+- Internally, mouse buttons use the F4SE/Papyrus keycode convention (256–260) in the framework's keyboard binding space; INI persistence uses names `MOUSELEFT` … `MOUSE5`.
+- Hotkey conflict detection now compares bindings per input device (a mouse code no longer false-conflicts with a gamepad code sharing the same number).
+
+### Internal
+
+- **Fixed the pause-menu button disappearing** after the CommonLibF4 fork migration: the fork's `GFx::Value::GetString()` returns `const char*` where the old library returned `std::string_view`, silently turning the "is this MainMenu.swf?" check into a pointer comparison that never matched — so the injection bailed for every movie. The comparison is content-based again.
+- Logging moved to spdlog directly (the fork has no `F4SE::log` wrapper); the log file location and format are unchanged.
+- Plugin version bumped to 3.3.0; `F4SE::Init` now allocates the trampoline (replaces `F4SE::AllocTrampoline`).
+
 ## [3.2.0] — 2026-07-17
 
 Feature release: MCM image controls can now render Flash **vector art and timeline animations**, and FallUI's Flash-based in-MCM applications (the drag-and-drop **HUD layout editor** and the **Icon Library** preset manager) are recreated natively in ImGui with byte-identical persistence.

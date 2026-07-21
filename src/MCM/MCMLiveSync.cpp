@@ -65,7 +65,23 @@ namespace MCMLiveSync {
 
         // Runs on the F4SE UI task thread while the pause menu is (expected to
         // be) open. Delivers every queued push through root.mcm.
+        void FlushOnUIThreadImpl();
+
+        // Exception containment wrapper: the UI task thread has no handler
+        // above us, so an escaped C++ exception would be a log-less CTD.
         void FlushOnUIThread() {
+            try {
+                FlushOnUIThreadImpl();
+            } catch (const std::exception& e) {
+                logger::error("[MCMLiveSync] EXCEPTION during keybind sync flush: {}", e.what());
+                s_flushScheduled.store(false);
+            } catch (...) {
+                logger::error("[MCMLiveSync] EXCEPTION (non-std) during keybind sync flush");
+                s_flushScheduled.store(false);
+            }
+        }
+
+        void FlushOnUIThreadImpl() {
             // Re-validate on the UI thread — the menu may have closed between
             // scheduling and execution.
             auto* ui = RE::UI::GetSingleton();

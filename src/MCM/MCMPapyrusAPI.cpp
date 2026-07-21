@@ -456,37 +456,43 @@ namespace MCMPapyrusAPI {
     };
 
     // Dispatches one registrant. Called by F4SE once per registration.
+    // Runs on the render thread (page open/close transitions in OnFrameEnd);
+    // an escaped C++ exception here unwinds through the D3D present hook and
+    // kills the process with nothing logged, so contain and log per-registrant.
     static void F4SEAPI RegistrantFunctor(std::uint64_t a_handle, const char* a_scriptName,
                                           const char* a_callbackName, void* a_data) {
         auto* payload = static_cast<EventArgs*>(a_data);
         if (!payload || !a_scriptName || !a_callbackName) return;
 
-        auto* gameVM = RE::GameVM::GetSingleton();
-        if (!gameVM || !gameVM->GetVM()) return;
-        auto* vm = gameVM->GetVM().get();
+        try {
+            auto* gameVM = RE::GameVM::GetSingleton();
+            if (!gameVM || !gameVM->GetVM()) return;
+            auto* vm = gameVM->GetVM().get();
 
-        // Pack the string args (0, 1 or 2 of them) into a scrap function.
-        RE::BSTThreadScrapFunction<bool(RE::BSScrapArray<RE::BSScript::Variable>&)> scrapFunc;
-        switch (payload->args.size()) {
-            case 0:
-                scrapFunc = (PapyrusFunctionArgs::FunctionArgs<>{ vm }).get();
-                break;
-            case 1:
-                scrapFunc = (PapyrusFunctionArgs::FunctionArgs<RE::BSFixedString>{
-                    vm, RE::BSFixedString(payload->args[0].c_str()) }).get();
-                break;
-            default:
-                scrapFunc = (PapyrusFunctionArgs::FunctionArgs<RE::BSFixedString, RE::BSFixedString>{
-                    vm, RE::BSFixedString(payload->args[0].c_str()),
-                    RE::BSFixedString(payload->args[1].c_str()) }).get();
-                break;
+            // Pack the string args (0, 1 or 2 of them). The functor owner must
+            // stay alive across the dispatch and must not be copied into a
+            // BSTThreadScrapFunction variable (its layout is runtime-specific
+            // on OG — see PapyrusFunctionArgs.h).
+            const auto argCount = static_cast<RE::BSScrapArray<RE::BSScript::Variable>::size_type>(
+                std::min<std::size_t>(payload->args.size(), 2));
+            RE::BSScrapArray<RE::BSScript::Variable> scrap{ argCount };
+            for (RE::BSScrapArray<RE::BSScript::Variable>::size_type i = 0; i < argCount; ++i) {
+                RE::BSScript::PackVariable(scrap.at(i), RE::BSFixedString(payload->args[i].c_str()));
+            }
+            PapyrusFunctionArgs::RuntimeFunctionArgs fargs{ vm, scrap };
+
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> nullCallback;
+            vm->DispatchMethodCall(a_handle,
+                RE::BSFixedString(a_scriptName),
+                RE::BSFixedString(a_callbackName),
+                fargs.get(), nullCallback);
+        } catch (const std::exception& e) {
+            logger::error("[MCMPapyrusAPI] EXCEPTION dispatching external event to {}.{} (handle 0x{:X}): {}",
+                a_scriptName, a_callbackName, a_handle, e.what());
+        } catch (...) {
+            logger::error("[MCMPapyrusAPI] EXCEPTION (non-std) dispatching external event to {}.{} (handle 0x{:X})",
+                a_scriptName, a_callbackName, a_handle);
         }
-
-        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> nullCallback;
-        vm->DispatchMethodCall(a_handle,
-            RE::BSFixedString(a_scriptName),
-            RE::BSFixedString(a_callbackName),
-            scrapFunc, nullCallback);
     }
 
     // Fires a single external event name to all its registrants.

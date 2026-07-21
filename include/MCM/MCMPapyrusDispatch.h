@@ -9,8 +9,9 @@
 // Fire-and-forget Papyrus function dispatcher for MCM button actions and value-change callbacks.
 // Handles action strings like "CallFunction:ScriptName.FunctionName" and
 // "CallGlobalFunction:ScriptName.FunctionName".
-// Uses the game's BSTThreadScrapFunction construction mechanism (REL::ID 69733)
-// to produce valid callable wrappers for DispatchStaticCall / DispatchMethodCall.
+// Argument packs are built per runtime by PapyrusFunctionArgs::GameScrapFunction
+// (OG needs the game's own VS2013-layout functor; NG/AE use std::function) —
+// see PapyrusFunctionArgs.h for the ABI details.
 namespace MCMPapyrusDispatch {
 
     // Execute an MCM action string. Fire-and-forget — logs errors but does not block.

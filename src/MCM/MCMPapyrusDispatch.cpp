@@ -1,4 +1,4 @@
-#include "MCM/MCMPapyrusDispatch.h"
+﻿#include "MCM/MCMPapyrusDispatch.h"
 #include "MCM/PapyrusFunctionArgs.h"
 
 #include <chrono>
@@ -83,7 +83,7 @@ namespace MCMPapyrusDispatch {
         std::string actionTarget = action.substr(colonPos + 1);
 
         if (actionType == "CallFunction") {
-            // CallFunction:ScriptName.FunctionName — calls on the form associated with the MCM config
+            // CallFunction:ScriptName.FunctionName â€” calls on the form associated with the MCM config
             auto dotPos = actionTarget.find('.');
             if (dotPos == std::string::npos) {
                 logger::error("[MCMPapyrusDispatch] Invalid function format (no '.'): {}", actionTarget);
@@ -129,7 +129,7 @@ namespace MCMPapyrusDispatch {
             }
 
         } else if (actionType == "CallGlobalFunction") {
-            // CallGlobalFunction:ScriptName.FunctionName — static/global call
+            // CallGlobalFunction:ScriptName.FunctionName â€” static/global call
             auto dotPos = actionTarget.find('.');
             if (dotPos == std::string::npos) {
                 logger::error("[MCMPapyrusDispatch] Invalid function format (no '.'): {}", actionTarget);
@@ -193,7 +193,7 @@ namespace MCMPapyrusDispatch {
             } else if constexpr (std::is_same_v<T, std::string>) {
                 return v;
             } else {
-                return {};  // monostate — plain button press, no value
+                return {};  // monostate â€” plain button press, no value
             }
         }, value);
     }
@@ -243,7 +243,7 @@ namespace MCMPapyrusDispatch {
                     } else if constexpr (std::is_same_v<T, std::string>) {
                         RE::BSScript::PackVariable(var, RE::BSFixedString(v.c_str()));
                     } else {
-                        // monostate — no value available; pack integer 0 so the
+                        // monostate â€” no value available; pack integer 0 so the
                         // call still has the expected argument count
                         RE::BSScript::PackVariable(var, static_cast<std::int32_t>(0));
                     }
@@ -283,7 +283,7 @@ namespace MCMPapyrusDispatch {
                 }, value));
                 break;
             case PT::StringTemplate:
-                // "{value}" embedded in longer text — substitute as a string
+                // "{value}" embedded in longer text â€” substitute as a string
                 RE::BSScript::PackVariable(var,
                     RE::BSFixedString(SubstituteTemplate(param.stringVal, value).c_str()));
                 break;
@@ -294,6 +294,10 @@ namespace MCMPapyrusDispatch {
                                  const std::string& modName,
                                  const std::string& fallbackForm,
                                  const ControlValue& value) {
+        // Called from the render thread (buttons) or the window-message thread
+        // (keybinds); neither has an exception handler above us, so an escaped
+        // C++ exception is an instant, log-less CTD. Contain and log instead.
+        try {
         // Console commands need no VM or parameter packing. The real MCM runs
         // them synchronously from its input handler; we're called from the
         // window-message thread (keybinds) or render thread (buttons), so run
@@ -314,7 +318,7 @@ namespace MCMPapyrusDispatch {
         }
 
         // CallExternalFunction bypasses Papyrus entirely: MCM's AS3 invokes
-        // `stage.f4se.plugins[<plugin>][<function>](...args)` — a Scaleform
+        // `stage.f4se.plugins[<plugin>][<function>](...args)` â€” a Scaleform
         // function object the target F4SE plugin registered through F4SE's
         // scaleform interface. F4SE injects the `f4se` object into every menu
         // movie, so we invoke it on whichever always-loaded movie is available
@@ -373,6 +377,9 @@ namespace MCMPapyrusDispatch {
                 const std::string func = action.function;
                 const std::string mod = modName;
                 tasks->AddUITask([plugin, func, mod, packed]() {
+                    // Runs later on the game's UI thread â€” same containment
+                    // rule as the dispatcher itself.
+                    try {
                     auto* ui = RE::UI::GetSingleton();
                     if (!ui) {
                         return;
@@ -391,7 +398,7 @@ namespace MCMPapyrusDispatch {
                         const std::string path = "root.f4se.plugins." + plugin;
                         if (!root->GetVariable(std::addressof(pluginObj), path.c_str()) ||
                             !pluginObj.IsObject()) {
-                            continue;  // f4se object missing on this movie — try the next
+                            continue;  // f4se object missing on this movie â€” try the next
                         }
 
                         std::vector<RE::Scaleform::GFx::Value> args;
@@ -417,6 +424,13 @@ namespace MCMPapyrusDispatch {
                     }
                     logger::warn("[MCMPapyrusDispatch] CallExternalFunction {}.{}: no loaded movie exposes root.f4se.plugins.{} (mod: {})",
                         plugin, func, plugin, mod);
+                    } catch (const std::exception& e) {
+                        logger::error("[MCMPapyrusDispatch] EXCEPTION in CallExternalFunction {}.{} UI task (mod: {}): {}",
+                            plugin, func, mod, e.what());
+                    } catch (...) {
+                        logger::error("[MCMPapyrusDispatch] EXCEPTION (non-std) in CallExternalFunction {}.{} UI task (mod: {})",
+                            plugin, func, mod);
+                    }
                 });
                 s_statusText = action.function + " OK";
                 s_lastActionTime = std::chrono::steady_clock::now();
@@ -442,7 +456,9 @@ namespace MCMPapyrusDispatch {
         for (RE::BSScrapArray<RE::BSScript::Variable>::size_type i = 0; i < paramCount; ++i) {
             PackParam(scrap.at(i), action.params[i], value);
         }
-        auto scrapFunc = (PapyrusFunctionArgs::RuntimeFunctionArgs{ vm, scrap }).get();
+        // Owner must outlive the dispatch; pass fargs.get() by reference only
+        // (layout is runtime-specific on OG â€” see PapyrusFunctionArgs.h).
+        PapyrusFunctionArgs::RuntimeFunctionArgs fargs{ vm, scrap };
 
         RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> nullCallback;
         bool success = false;
@@ -452,7 +468,7 @@ namespace MCMPapyrusDispatch {
             success = vm->DispatchStaticCall(
                 RE::BSFixedString(action.scriptName.c_str()),
                 RE::BSFixedString(action.function.c_str()),
-                scrapFunc, nullCallback);
+                fargs.get(), nullCallback);
         } else if (action.type == "CallFunction") {
             // Method call on the script attached to the target form.
             // Prefer the action's own "form"; fall back to the control's sourceForm.
@@ -476,7 +492,7 @@ namespace MCMPapyrusDispatch {
             }
 
             // If the config names the script, dispatch directly to it. When it
-            // doesn't (the common case — MCM keybinds.json has no scriptName
+            // doesn't (the common case â€” MCM keybinds.json has no scriptName
             // field at all, and most config.json actions omit it too), mirror
             // the real MCM: its VMScript helper defaults the class name to
             // "ScriptObject", which every Papyrus script derives from, so the
@@ -486,7 +502,7 @@ namespace MCMPapyrusDispatch {
                 success = vm->DispatchMethodCall(handle,
                     RE::BSFixedString(action.scriptName.c_str()),
                     RE::BSFixedString(action.function.c_str()),
-                    scrapFunc, nullCallback);
+                    fargs.get(), nullCallback);
             } else {
                 // Resolve the bound object explicitly (exactMatch=false casts
                 // any attached script to ScriptObject), then dispatch on the
@@ -495,7 +511,7 @@ namespace MCMPapyrusDispatch {
                 if (vm->FindBoundObject(handle, "ScriptObject", false, scriptObj, false) && scriptObj) {
                     success = vm->DispatchMethodCall(scriptObj,
                         RE::BSFixedString(action.function.c_str()),
-                        scrapFunc, nullCallback);
+                        fargs.get(), nullCallback);
                 } else {
                     logger::warn("[MCMPapyrusDispatch] Structured CallFunction: no script bound to form 0x{:X} (mod: {})",
                         form->GetFormID(), modName);
@@ -519,6 +535,16 @@ namespace MCMPapyrusDispatch {
             logger::warn("[MCMPapyrusDispatch] Structured action {}.{} dispatch FAILED (mod: {})",
                 action.scriptName, action.function, modName);
             s_statusText = action.function + " (failed)";
+        }
+
+        } catch (const std::exception& e) {
+            logger::error("[MCMPapyrusDispatch] EXCEPTION executing {} {}.{} (mod: {}): {}",
+                action.type, action.scriptName, action.function, modName, e.what());
+            s_statusText = action.function + " (exception)";
+        } catch (...) {
+            logger::error("[MCMPapyrusDispatch] EXCEPTION (non-std) executing {} {}.{} (mod: {})",
+                action.type, action.scriptName, action.function, modName);
+            s_statusText = action.function + " (exception)";
         }
     }
 
@@ -548,21 +574,21 @@ namespace MCMPapyrusDispatch {
         // call on the form's attached script resolved via the ScriptObject
         // base class. OnControlDown(controlName); OnControlUp(controlName,
         // heldSeconds). The receiving script must sit on the form itself
-        // (quests, not aliases) — same requirement as the real MCM.
+        // (quests, not aliases) â€” same requirement as the real MCM.
         RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> nullCallback;
         bool ok = false;
         RE::BSTSmartPointer<RE::BSScript::Object> scriptObj;
         if (vm->FindBoundObject(handle, "ScriptObject", false, scriptObj, false) && scriptObj) {
             if (down) {
-                auto scrapFunc = (PapyrusFunctionArgs::FunctionArgs<RE::BSFixedString>{
-                    vm, RE::BSFixedString(controlId.c_str()) }).get();
+                PapyrusFunctionArgs::FunctionArgs<RE::BSFixedString> fargs{
+                    vm, RE::BSFixedString(controlId.c_str()) };
                 ok = vm->DispatchMethodCall(scriptObj, RE::BSFixedString("OnControlDown"),
-                                            scrapFunc, nullCallback);
+                                            fargs.get(), nullCallback);
             } else {
-                auto scrapFunc = (PapyrusFunctionArgs::FunctionArgs<RE::BSFixedString, float>{
-                    vm, RE::BSFixedString(controlId.c_str()), heldSeconds }).get();
+                PapyrusFunctionArgs::FunctionArgs<RE::BSFixedString, float> fargs{
+                    vm, RE::BSFixedString(controlId.c_str()), heldSeconds };
                 ok = vm->DispatchMethodCall(scriptObj, RE::BSFixedString("OnControlUp"),
-                                            scrapFunc, nullCallback);
+                                            fargs.get(), nullCallback);
             }
         }
         handlePolicy.ReleaseHandle(handle);
