@@ -1,9 +1,11 @@
 #include "MCM/MCMKeybindTranslator.h"
+#include "MCM/MCMJsonSanitizer.h"
 #include "MCM/MCMKeybindStore.h"
 #include "MCM/MCMPapyrusDispatch.h"
 #include "HotkeyManager.h"
 #include "Application.h"
 
+#include <atomic>
 #include <chrono>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -11,6 +13,11 @@
 namespace MCMKeybindTranslator {
 
     static std::vector<MCMKeybind> s_keybinds;
+
+    // True when the real MCM runs alongside us (coexistence). Its MCMInput
+    // handler dispatches every keybind action itself, so ours must stay quiet
+    // or each press executes twice (see SetSuppressDispatch in the header).
+    static std::atomic<bool> s_suppressDispatch{ false };
 
     // Callback thunks — since HotkeyManager expects a plain __stdcall function pointer,
     // we create a static dispatch table keyed by keybind index.
@@ -30,6 +37,9 @@ namespace MCMKeybindTranslator {
     template <size_t N>
     static void __stdcall KeybindThunk() {
         if constexpr (N < MAX_KEYBINDS) {
+            if (s_suppressDispatch.load(std::memory_order_relaxed)) {
+                return;  // real MCM's input handler dispatches this bind
+            }
             if (s_actionObjTable[N].has_value()) {
                 if (s_actionObjTable[N]->type == "SendEvent") {
                     s_pressTimeTable[N] = std::chrono::steady_clock::now();
@@ -51,6 +61,9 @@ namespace MCMKeybindTranslator {
     template <size_t N>
     static void __stdcall KeybindUpThunk() {
         if constexpr (N < MAX_KEYBINDS) {
+            if (s_suppressDispatch.load(std::memory_order_relaxed)) {
+                return;  // real MCM's input handler dispatches this bind
+            }
             if (s_actionObjTable[N].has_value() && s_actionObjTable[N]->type == "SendEvent") {
                 const float held = std::chrono::duration<float>(
                     std::chrono::steady_clock::now() - s_pressTimeTable[N]).count();
@@ -109,9 +122,12 @@ namespace MCMKeybindTranslator {
 
         nlohmann::json root;
         try {
-            // ignore_comments: real MCM reads these with JsonCpp, which accepts
-            // // comments — mod-shipped keybinds.json files may contain them.
-            root = nlohmann::json::parse(file, nullptr, true, /*ignore_comments=*/true);
+            // Sanitize first: mod-shipped keybinds.json files contain comments,
+            // trailing commas (Workshop Plus), and stray \escapes — all accepted
+            // by the real MCM's non-strict AS3 JSON decoder.
+            std::string text((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+            root = nlohmann::json::parse(MCMJson::SanitizeLenientJson(text));
         } catch (const nlohmann::json::parse_error& e) {
             logger::error("[MCMKeybindTranslator] Parse error in '{}': {}", keybindsPath.string(), e.what());
             return;
@@ -197,6 +213,13 @@ namespace MCMKeybindTranslator {
 
         logger::info("[MCMKeybindTranslator] Registered {} keybind(s) for '{}'",
             s_keybinds.size(), modName);
+    }
+
+    void SetSuppressDispatch(bool suppress) {
+        s_suppressDispatch.store(suppress, std::memory_order_relaxed);
+        if (suppress) {
+            logger::info("[MCMKeybindTranslator] Keybind action dispatch suppressed — the real MCM's input handler executes keybinds (bindings remain visible/rebindable here)");
+        }
     }
 
     void UnregisterMod(const std::string& modName) {

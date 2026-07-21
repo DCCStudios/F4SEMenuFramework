@@ -280,7 +280,9 @@ Use the normal MCM script API (`GetModSettingInt`, `SetModSettingFloat`, `Regist
 
 - All standard MCM control types are supported, plus **`dropdownFiles`** (directory-listing dropdown: `valueOptions.path` relative to the game root, `valueOptions.mask` wildcard; stores the file name with extension) and the per-control **`modName`** override (the control targets another mod's settings INI, as in real MCM).
 - **`image` controls** can use loose files (`imagePath`) or Flash library symbols (`imageLibName` / `imageClassName`). Symbol lookup tries embedded bitmaps first, then falls back to a built-in **vector-shape / timeline-animation rasterizer** — so gradient art, vector logos, and tween animations from `lib.swf` / `logo.swf` display without any bitmap export. Animation driven by ActionScript (not the timeline) cannot be replayed.
-- Full-page decorative branding images (`M8r.View.*Intro*` classes) are suppressed so pages show only functional controls.
+- **Action params** support MCM's typed cast prefixes (`"{i}42"`, `"{f}1.5"`, `"{b}1"`, `"{s}text"`, `"{i}{value}"` etc.) in `config.json` and `keybinds.json`; they are passed to Papyrus with the correct types. `"{value}"` embedded in longer strings is substituted as text.
+- **All MCM action types** work, including `CallExternalFunction` (Scaleform functions F4SE plugins register on `root.f4se.plugins.<plugin>`), used by mods like FallSouls and Floating Damage.
+- Full-page branding images (`M8r.View.*Intro*` classes) are drawn as **page backdrops** behind the controls, like in the Scaleform MCM.
 - FallUI's embedded Flash apps — the **HUD layout editor** (`M8r.Controller.FallUIHUD`) and **Icon Library** (`M8r.View.FallUIIconLibrary`) — are recreated natively in ImGui. They read and write the exact same `Data/MCM/Settings/FallUIHUD.ini` formats as the originals, so layouts and presets round-trip with real FallUI.
 
 ### If you are a C++ plugin author

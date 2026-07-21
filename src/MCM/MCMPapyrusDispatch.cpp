@@ -171,6 +171,46 @@ namespace MCMPapyrusDispatch {
     // Structured action dispatch (object-form actions with typed params)
     // ------------------------------------------------------------------
 
+    // Stringifies a control value the way MCM's ActionScript does when it
+    // substitutes {value} into a string template (AS3 string coercion):
+    // Boolean -> "true"/"false", numbers -> decimal without trailing zeros.
+    static std::string ValueToString(const ControlValue& value) {
+        return std::visit([](auto&& v) -> std::string {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, bool>) {
+                return v ? "true" : "false";
+            } else if constexpr (std::is_same_v<T, int>) {
+                return std::to_string(v);
+            } else if constexpr (std::is_same_v<T, float>) {
+                // AS3 Number-to-String: integral values print without a
+                // decimal point, others with the shortest round-trip form.
+                if (v == static_cast<float>(static_cast<long long>(v))) {
+                    return std::to_string(static_cast<long long>(v));
+                }
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%g", v);
+                return buf;
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                return v;
+            } else {
+                return {};  // monostate — plain button press, no value
+            }
+        }, value);
+    }
+
+    // Replaces every "{value}" occurrence in a template with the stringified
+    // control value ("bConsole|{value}" -> "bConsole|true").
+    static std::string SubstituteTemplate(const std::string& tmpl, const ControlValue& value) {
+        const std::string sub = ValueToString(value);
+        std::string out = tmpl;
+        std::size_t pos = 0;
+        while ((pos = out.find("{value}", pos)) != std::string::npos) {
+            out.replace(pos, 7, sub);
+            pos += sub.size();
+        }
+        return out;
+    }
+
     // Packs one ActionParam into a Papyrus Variable, substituting the control's
     // value for "{value}" placeholders with its native type.
     static void PackParam(RE::BSScript::Variable& var,
@@ -209,6 +249,44 @@ namespace MCMPapyrusDispatch {
                     }
                 }, value);
                 break;
+            // "{i}{value}" / "{f}{value}" / "{b}{value}": the control's value
+            // coerced to an explicit Papyrus type (MCM's typed cast prefixes).
+            case PT::ValueAsInt:
+                RE::BSScript::PackVariable(var, std::visit([](auto&& v) -> std::int32_t {
+                    using T = std::decay_t<decltype(v)>;
+                    if constexpr (std::is_same_v<T, bool>) return v ? 1 : 0;
+                    else if constexpr (std::is_same_v<T, int>) return v;
+                    else if constexpr (std::is_same_v<T, float>) return static_cast<std::int32_t>(v);
+                    else if constexpr (std::is_same_v<T, std::string>) return std::atoi(v.c_str());
+                    else return 0;
+                }, value));
+                break;
+            case PT::ValueAsFloat:
+                RE::BSScript::PackVariable(var, std::visit([](auto&& v) -> float {
+                    using T = std::decay_t<decltype(v)>;
+                    if constexpr (std::is_same_v<T, bool>) return v ? 1.0f : 0.0f;
+                    else if constexpr (std::is_same_v<T, int>) return static_cast<float>(v);
+                    else if constexpr (std::is_same_v<T, float>) return v;
+                    else if constexpr (std::is_same_v<T, std::string>) return static_cast<float>(std::atof(v.c_str()));
+                    else return 0.0f;
+                }, value));
+                break;
+            case PT::ValueAsBool:
+                RE::BSScript::PackVariable(var, std::visit([](auto&& v) -> bool {
+                    using T = std::decay_t<decltype(v)>;
+                    if constexpr (std::is_same_v<T, bool>) return v;
+                    else if constexpr (std::is_same_v<T, int>) return v != 0;
+                    else if constexpr (std::is_same_v<T, float>) return v != 0.0f;
+                    else if constexpr (std::is_same_v<T, std::string>)
+                        return _stricmp(v.c_str(), "true") == 0 || std::atoi(v.c_str()) != 0;
+                    else return false;
+                }, value));
+                break;
+            case PT::StringTemplate:
+                // "{value}" embedded in longer text — substitute as a string
+                RE::BSScript::PackVariable(var,
+                    RE::BSFixedString(SubstituteTemplate(param.stringVal, value).c_str()));
+                break;
         }
     }
 
@@ -230,6 +308,117 @@ namespace MCMPapyrusDispatch {
                 tasks->AddTask([cmd]() { RE::Console::ExecuteCommand(cmd.c_str()); });
                 logger::info("[MCMPapyrusDispatch] Queued console command '{}' (mod: {})", cmd, modName);
                 s_statusText = "Console: " + cmd;
+                s_lastActionTime = std::chrono::steady_clock::now();
+            }
+            return;
+        }
+
+        // CallExternalFunction bypasses Papyrus entirely: MCM's AS3 invokes
+        // `stage.f4se.plugins[<plugin>][<function>](...args)` — a Scaleform
+        // function object the target F4SE plugin registered through F4SE's
+        // scaleform interface. F4SE injects the `f4se` object into every menu
+        // movie, so we invoke it on whichever always-loaded movie is available
+        // (HUD during gameplay, pause menu when paused). Scaleform may only be
+        // touched from the game's UI thread -> F4SE UI task.
+        if (action.type == "CallExternalFunction") {
+            // Pre-resolve params to plain data on this thread ({value}
+            // substitution included); the UI task builds GFx::Values from it.
+            struct GfxParam {
+                enum class Kind { Bool, Number, String } kind = Kind::String;
+                bool b = false;
+                double n = 0.0;
+                std::string s;
+            };
+            auto packed = std::make_shared<std::vector<GfxParam>>();
+            using PT = MCMConfigParser::ActionParam::Type;
+            for (const auto& p : action.params) {
+                GfxParam gp;
+                switch (p.type) {
+                    case PT::Bool:   gp.kind = GfxParam::Kind::Bool;   gp.b = p.boolVal; break;
+                    case PT::Int:    gp.kind = GfxParam::Kind::Number; gp.n = p.intVal; break;
+                    case PT::Float:  gp.kind = GfxParam::Kind::Number; gp.n = p.floatVal; break;
+                    case PT::String: gp.kind = GfxParam::Kind::String; gp.s = p.stringVal; break;
+                    case PT::StringTemplate:
+                        gp.kind = GfxParam::Kind::String;
+                        gp.s = SubstituteTemplate(p.stringVal, value);
+                        break;
+                    case PT::ValuePlaceholder:
+                        // Control value with its native runtime type
+                        std::visit([&gp](auto&& v) {
+                            using T = std::decay_t<decltype(v)>;
+                            if constexpr (std::is_same_v<T, bool>) { gp.kind = GfxParam::Kind::Bool; gp.b = v; }
+                            else if constexpr (std::is_same_v<T, int>) { gp.kind = GfxParam::Kind::Number; gp.n = v; }
+                            else if constexpr (std::is_same_v<T, float>) { gp.kind = GfxParam::Kind::Number; gp.n = v; }
+                            else if constexpr (std::is_same_v<T, std::string>) { gp.kind = GfxParam::Kind::String; gp.s = v; }
+                            else { gp.kind = GfxParam::Kind::Number; gp.n = 0.0; }
+                        }, value);
+                        break;
+                    case PT::ValueAsInt:
+                    case PT::ValueAsFloat:
+                        gp.kind = GfxParam::Kind::Number;
+                        gp.n = std::atof(ValueToString(value).c_str());
+                        break;
+                    case PT::ValueAsBool: {
+                        gp.kind = GfxParam::Kind::Bool;
+                        const std::string sv = ValueToString(value);
+                        gp.b = (_stricmp(sv.c_str(), "true") == 0 || std::atof(sv.c_str()) != 0.0);
+                        break;
+                    }
+                }
+                packed->push_back(std::move(gp));
+            }
+
+            if (const auto* tasks = F4SE::GetTaskInterface()) {
+                const std::string plugin = action.plugin;
+                const std::string func = action.function;
+                const std::string mod = modName;
+                tasks->AddUITask([plugin, func, mod, packed]() {
+                    auto* ui = RE::UI::GetSingleton();
+                    if (!ui) {
+                        return;
+                    }
+                    for (const char* menuName : { "HUDMenu", "PauseMenu" }) {
+                        if (!ui->GetMenuOpen(menuName)) {
+                            continue;
+                        }
+                        auto menu = ui->GetMenu(menuName);
+                        if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot) {
+                            continue;
+                        }
+                        auto* root = menu->uiMovie->asMovieRoot.get();
+
+                        RE::Scaleform::GFx::Value pluginObj;
+                        const std::string path = "root.f4se.plugins." + plugin;
+                        if (!root->GetVariable(std::addressof(pluginObj), path.c_str()) ||
+                            !pluginObj.IsObject()) {
+                            continue;  // f4se object missing on this movie — try the next
+                        }
+
+                        std::vector<RE::Scaleform::GFx::Value> args;
+                        args.reserve(packed->size());
+                        for (const auto& gp : *packed) {
+                            switch (gp.kind) {
+                                case GfxParam::Kind::Bool:   args.emplace_back(gp.b); break;
+                                case GfxParam::Kind::Number: args.emplace_back(gp.n); break;
+                                case GfxParam::Kind::String: args.emplace_back(gp.s.c_str()); break;
+                            }
+                        }
+
+                        RE::Scaleform::GFx::Value ret;
+                        if (pluginObj.Invoke(func.c_str(), std::addressof(ret),
+                                             args.empty() ? nullptr : args.data(), args.size())) {
+                            logger::info("[MCMPapyrusDispatch] CallExternalFunction {}.{} invoked via {} ({} arg(s), mod: {})",
+                                plugin, func, menuName, args.size(), mod);
+                            return;
+                        }
+                        logger::warn("[MCMPapyrusDispatch] CallExternalFunction {}.{} Invoke failed on {} (mod: {})",
+                            plugin, func, menuName, mod);
+                        return;
+                    }
+                    logger::warn("[MCMPapyrusDispatch] CallExternalFunction {}.{}: no loaded movie exposes root.f4se.plugins.{} (mod: {})",
+                        plugin, func, plugin, mod);
+                });
+                s_statusText = action.function + " OK";
                 s_lastActionTime = std::chrono::steady_clock::now();
             }
             return;

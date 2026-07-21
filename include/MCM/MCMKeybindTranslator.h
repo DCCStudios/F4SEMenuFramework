@@ -23,6 +23,15 @@ namespace MCMKeybindTranslator {
     // Parse and register keybinds from a keybinds.json file for a given mod.
     void RegisterFromFile(const std::filesystem::path& keybindsPath, const std::string& modName);
 
+    // Coexistence guard: when the REAL MCM is loaded alongside us, its own
+    // input handler (MCMInput, active from kMessage_GameLoaded) already
+    // dispatches every keybind action. If we dispatch too, one key press runs
+    // the action twice — fatal for toggle hotkeys (Wheel Menu's ToggleMenu,
+    // Screen Archer Menu's SAM.ToggleMenu open and then instantly close).
+    // With suppression on, keybinds stay registered (visible + rebindable in
+    // our UI, synced through Keybinds.json / live sync) but our thunks no-op.
+    void SetSuppressDispatch(bool suppress);
+
     // Unregister all keybinds for a given mod.
     void UnregisterMod(const std::string& modName);
 

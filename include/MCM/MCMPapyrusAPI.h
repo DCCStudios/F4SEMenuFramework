@@ -44,9 +44,14 @@ namespace MCMPapyrusAPI {
     void DispatchSettingChanged(const std::string& modName, const std::string& controlId);
 
     // Fired when a mod's translated page becomes the displayed page.
+    // Sends "OnMCMMenuOpen" and "OnMCMMenuOpen|<modName>" with NO arguments —
+    // the shipped MCM.swf sends none (its .psc doc comment is wrong), and the
+    // Papyrus VM drops calls whose argument count mismatches the handler.
     void DispatchMenuOpen(const std::string& modName);
 
     // Fired when a mod's translated page stops being displayed.
+    // Sends only "OnMCMMenuClose|<modName>" (no arguments); real MCM has no
+    // unfiltered OnMCMMenuClose send site.
     void DispatchMenuClose(const std::string& modName);
 
     // Legacy whole-menu events fired by the real MCM when the pause-menu MCM

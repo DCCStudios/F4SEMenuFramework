@@ -1,4 +1,5 @@
 #include "MCM/MCMConfigParser.h"
+#include "MCM/MCMJsonSanitizer.h"
 #include <fstream>
 
 namespace MCMConfigParser {
@@ -59,7 +60,11 @@ namespace MCMConfigParser {
 
     // Parses one entry of an action "params" array into a typed ActionParam.
     // The special string "{value}" becomes a placeholder that is substituted
-    // with the control's current value at dispatch time.
+    // with the control's current value at dispatch time. String constants may
+    // carry an explicit type cast prefix — "{i}42", "{f}1.5", "{b}true",
+    // "{s}text" — which MCM's wiki documents and mods rely on (NAC X passes
+    // "{i}<n>" weather indices to a Papyrus loadWeather(Int) global; sending
+    // them as strings makes the VM's argument binding fail silently).
     static ActionParam ParseActionParam(const json& p) {
         ActionParam param;
         if (p.is_boolean()) {
@@ -75,6 +80,40 @@ namespace MCMConfigParser {
             std::string s = p.get<std::string>();
             if (s == "{value}") {
                 param.type = ActionParam::Type::ValuePlaceholder;
+            } else if (s.rfind("{i}", 0) == 0) {
+                const std::string rest = s.substr(3);
+                if (rest == "{value}") {
+                    param.type = ActionParam::Type::ValueAsInt;
+                } else {
+                    param.type = ActionParam::Type::Int;
+                    param.intVal = std::atoi(rest.c_str());
+                }
+            } else if (s.rfind("{f}", 0) == 0) {
+                const std::string rest = s.substr(3);
+                if (rest == "{value}") {
+                    param.type = ActionParam::Type::ValueAsFloat;
+                } else {
+                    param.type = ActionParam::Type::Float;
+                    param.floatVal = static_cast<float>(std::atof(rest.c_str()));
+                }
+            } else if (s.rfind("{b}", 0) == 0) {
+                const std::string rest = s.substr(3);
+                if (rest == "{value}") {
+                    param.type = ActionParam::Type::ValueAsBool;
+                } else {
+                    // MCM casts via Boolean(int(...)): "1" -> true, "0" -> false
+                    param.type = ActionParam::Type::Bool;
+                    param.boolVal = (_stricmp(rest.c_str(), "true") == 0 || std::atoi(rest.c_str()) != 0);
+                }
+            } else if (s.rfind("{s}", 0) == 0) {
+                param.type = ActionParam::Type::String;
+                param.stringVal = s.substr(3);
+            } else if (s.find("{value}") != std::string::npos) {
+                // "{value}" embedded in longer text (e.g. "bConsole|{value}"):
+                // keep the template; the dispatcher substitutes the control's
+                // value as a string, like MCM's AS3 replace() does.
+                param.type = ActionParam::Type::StringTemplate;
+                param.stringVal = std::move(s);
             } else {
                 param.type = ActionParam::Type::String;
                 param.stringVal = std::move(s);
@@ -102,6 +141,7 @@ namespace MCMConfigParser {
         }
         if (act.contains("function") && act["function"].is_string()) action.function = act["function"].get<std::string>();
         if (act.contains("command") && act["command"].is_string()) action.command = act["command"].get<std::string>();
+        if (act.contains("plugin") && act["plugin"].is_string()) action.plugin = act["plugin"].get<std::string>();
 
         if (act.contains("params") && act["params"].is_array()) {
             for (const auto& p : act["params"]) {
@@ -111,16 +151,19 @@ namespace MCMConfigParser {
 
         // Per-type validation, matching what the real MCM's keybind/action
         // executor actually requires:
-        //  - CallFunction:       form + function (scriptName optional — MCM
-        //                        defaults to ScriptObject when omitted)
-        //  - CallGlobalFunction: script + function
-        //  - RunConsoleCommand:  command
-        //  - SendEvent:          form (OnControlDown/Up delivered to its script)
+        //  - CallFunction:         form + function (scriptName optional — MCM
+        //                          defaults to ScriptObject when omitted)
+        //  - CallGlobalFunction:   script + function
+        //  - CallExternalFunction: plugin + function
+        //  - RunConsoleCommand:    command
+        //  - SendEvent:            form (OnControlDown/Up delivered to its script)
         if (action.type.empty()) return std::nullopt;
         if (action.type == "RunConsoleCommand") {
             if (action.command.empty()) return std::nullopt;
         } else if (action.type == "SendEvent") {
             if (action.form.empty()) return std::nullopt;
+        } else if (action.type == "CallExternalFunction") {
+            if (action.plugin.empty() || action.function.empty()) return std::nullopt;
         } else if (action.function.empty()) {
             return std::nullopt;
         }
@@ -365,11 +408,14 @@ namespace MCMConfigParser {
 
         json root;
         try {
-            // ignore_comments=true: real MCM parses configs with JsonCpp, whose
-            // default reader accepts // and /* */ comments — and shipped mods
-            // rely on that (Jump Grunt, Elzee Recoil Shake annotate every key).
-            // Strict parsing made those configs fail entirely.
-            root = json::parse(file, nullptr, /*allow_exceptions=*/true, /*ignore_comments=*/true);
+            // Real MCM's UI parses configs with as3corelib's NON-STRICT JSON
+            // decoder, and shipped mods rely on its leniencies: comments
+            // (Jump Grunt, Elzee Recoil Shake), invalid \escapes in strings
+            // (Active Effects on HUD writes "Documents\My Games\..."), and
+            // trailing commas (Workshop Plus). Sanitize to strict JSON first.
+            std::string text((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+            root = json::parse(MCMJson::SanitizeLenientJson(text));
         } catch (const json::parse_error& e) {
             logger::error("[MCMConfigParser] JSON parse error in '{}': {}", configPath.string(), e.what());
             return std::nullopt;

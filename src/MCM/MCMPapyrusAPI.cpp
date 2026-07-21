@@ -510,19 +510,27 @@ namespace MCMPapyrusAPI {
     }
 
     void DispatchMenuOpen(const std::string& modName) {
-        EventArgs payload;
-        payload.args = { modName };
+        // Despite MCM.psc's doc comment claiming OnMCMMenuOpen(string modName),
+        // the shipped MCM.swf sends BOTH the unfiltered and the "|ModName"
+        // variant with NO arguments (MCM_Menu.as: SendExternalEvent(name) with
+        // nothing else). The Papyrus VM rejects calls whose argument count
+        // doesn't match the handler, so passing modName here silently broke
+        // zero-parameter handlers written against real MCM's actual behavior
+        // (e.g. Game Visuals Configuration Menu's OnMCMMenuOpen()).
+        EventArgs payload;  // intentionally empty — match the real MCM
         FireExternalEvent("OnMCMMenuOpen", payload);
         FireExternalEvent("OnMCMMenuOpen|" + modName, payload);
         logger::debug("[MCMPapyrusAPI] OnMCMMenuOpen fired (mod='{}')", modName);
     }
 
     void DispatchMenuClose(const std::string& modName) {
-        EventArgs payload;
-        payload.args = { modName };
-        FireExternalEvent("OnMCMMenuClose", payload);
+        // Real MCM only ever sends the filtered "OnMCMMenuClose|<mod>" variant
+        // (there is no unfiltered send site in the shipped SWF), and it carries
+        // no arguments. Mirror that exactly so registrants behave identically
+        // whether real MCM or this framework is the provider.
+        EventArgs payload;  // intentionally empty — match the real MCM
         FireExternalEvent("OnMCMMenuClose|" + modName, payload);
-        logger::debug("[MCMPapyrusAPI] OnMCMMenuClose fired (mod='{}')", modName);
+        logger::debug("[MCMPapyrusAPI] OnMCMMenuClose| fired (mod='{}')", modName);
     }
 
     void DispatchMCMOpen() {

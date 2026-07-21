@@ -74,6 +74,16 @@ namespace MCMRegistry {
             return;
         }
 
+        // Coexistence: the real MCM's own input handler (active since
+        // kMessage_GameLoaded) dispatches every keybind action already. Our
+        // translated keybinds must not dispatch too, or one press runs the
+        // action twice — toggle hotkeys then open-and-instantly-close their
+        // menus (Wheel Menu, Screen Archer Menu). Bindings stay registered so
+        // they remain visible/rebindable in our UI and sync via Keybinds.json.
+        if (MCMConflictCheck::IsNativeMCMPresent()) {
+            MCMKeybindTranslator::SetSuppressDispatch(true);
+        }
+
         // Step 2: Scan for MCM mod folders
         auto mods = MCMScanner::Scan();
         if (mods.empty()) {

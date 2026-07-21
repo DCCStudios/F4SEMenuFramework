@@ -63,7 +63,16 @@ namespace MCMConfigParser {
     // the special string "{value}" is substituted with the control's new value
     // (with its native type) at dispatch time.
     struct ActionParam {
-        enum class Type { Bool, Int, Float, String, ValuePlaceholder };
+        // ValuePlaceholder ("{value}") passes the control's current value with
+        // its native runtime type. The ValueAs* variants come from MCM's typed
+        // cast prefixes combined with the placeholder (e.g. "{i}{value}") and
+        // coerce the control's value to that Papyrus type before packing.
+        // StringTemplate is a string with "{value}" embedded in longer text
+        // (e.g. FallSouls' "bConsole|{value}"); the control's value is
+        // stringified and substituted in place, mirroring MCM's AS3
+        // `obj.replace(/{value}/, params.value)`.
+        enum class Type { Bool, Int, Float, String, ValuePlaceholder,
+                          ValueAsInt, ValueAsFloat, ValueAsBool, StringTemplate };
         Type type = Type::String;
         bool boolVal = false;
         int intVal = 0;
@@ -75,15 +84,19 @@ namespace MCMConfigParser {
     //   {"type": "CallFunction", "form": "Mod.esp|800", "scriptName": "MyScript",
     //    "function": "SetIntensity", "params": [50.0, "{value}"]}
     // The full set of MCM action types (verified against the real MCM's
-    // MCMKeybinds.cpp): CallFunction, CallGlobalFunction, RunConsoleCommand
-    // (uses "command"), SendEvent (uses "form" only — delivers OnControlDown/
-    // OnControlUp to the form's script with the keybind id as control name).
+    // MCMKeybinds.cpp and its AS3 OptionsList): CallFunction,
+    // CallGlobalFunction, CallExternalFunction (invokes a function an F4SE
+    // plugin registered on the Scaleform "root.f4se.plugins.<plugin>" object),
+    // RunConsoleCommand (uses "command"), SendEvent (uses "form" only —
+    // delivers OnControlDown/OnControlUp to the form's script with the
+    // keybind id as control name).
     struct MCMAction {
-        std::string type;        // "CallFunction", "CallGlobalFunction", "RunConsoleCommand", "SendEvent"
+        std::string type;        // "CallFunction", "CallGlobalFunction", "CallExternalFunction", "RunConsoleCommand", "SendEvent"
         std::string form;        // "Plugin.esp|HexID" (CallFunction / SendEvent)
         std::string scriptName;  // script name ("script" key for global calls); optional for CallFunction
         std::string function;    // function name (Call* types)
         std::string command;     // console command (RunConsoleCommand)
+        std::string plugin;      // Scaleform plugin-object name (CallExternalFunction)
         std::vector<ActionParam> params;
     };
 

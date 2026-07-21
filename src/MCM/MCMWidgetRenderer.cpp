@@ -100,15 +100,18 @@ namespace MCMWidgetRenderer {
     // have no keybinds.json action — the binding is shown/set but fires nothing).
     static void __stdcall NoOpHotkeyCallback() {}
 
-    // FallUI's MCM configs place decorative "intro" image controls (animated
-    // brand art such as M8r.View.FallUIHUDIntro — every FallUI mod ships one
-    // on its landing page) purely as visual backdrops for the Scaleform MCM.
-    // Flattened to a static texture by our SWF pipeline they just show up as
-    // a giant meaningless image, so we skip them entirely.
-    // M8r.View.FixFileDropdown is likewise skipped: it is an invisible AS3
-    // patch shim for MCM's file dropdowns, which we implement natively.
-    static bool IsSuppressedDecorativeImage(const std::string& className) {
-        if (className == "M8r.View.FixFileDropdown") return true;
+    // M8r.View.FixFileDropdown renders nothing on purpose: it is an invisible
+    // AS3 patch shim for MCM's file dropdowns, which we implement natively.
+    static bool IsInvisibleShimImage(const std::string& className) {
+        return className == "M8r.View.FixFileDropdown";
+    }
+
+    // FallUI's MCM configs place "intro" image controls (brand art such as
+    // M8r.View.FallUIHUDIntro — every FallUI mod ships one on its landing
+    // page) as visual BACKDROPS behind the page in the Scaleform MCM. Instead
+    // of flowing them into the layout like a regular image (where they'd push
+    // all controls down), we draw them behind the page's controls.
+    static bool IsIntroBackdropImage(const std::string& className) {
         return className.rfind("M8r.View.", 0) == 0 &&
                className.find("Intro") != std::string::npos;
     }
@@ -256,6 +259,81 @@ namespace MCMWidgetRenderer {
 
         s_cache[key] = result;
         return result;
+    }
+
+    // Draws a FallUI-style intro/branding image as the page's BACKDROP: the
+    // artwork is fitted ("contain") and centered inside the page's currently
+    // visible area and emitted into draw channel 0, underneath every control
+    // (RenderPage splits the window draw list into background/foreground
+    // channels). The control consumes no layout space, matching how the
+    // Scaleform MCM used these symbols as page backgrounds.
+    static void RenderIntroBackdrop(const MCMConfigParser::MCMControl& ctrl) {
+        ResolvedImage resolved;
+        if (!ctrl.imageLibName.empty() && !ctrl.imageClassName.empty()) {
+            resolved = ResolveLibraryImage(ctrl.imageLibName, ctrl.imageClassName, 0.0f);
+        }
+        if (!resolved.tex && !resolved.movie) {
+            return;
+        }
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        // Visible page area = the window draw list's clip rect (accounts for
+        // padding and any scrolling; the backdrop stays pinned while the
+        // page's controls scroll over it).
+        const ImVec2 rMin = dl->GetClipRectMin();
+        const ImVec2 rMax = dl->GetClipRectMax();
+        const float availW = rMax.x - rMin.x;
+        const float availH = rMax.y - rMin.y;
+        if (availW < 16.0f || availH < 16.0f) {
+            return;
+        }
+
+        const float nw = resolved.width > 0 ? static_cast<float>(resolved.width) : 512.0f;
+        const float nh = resolved.height > 0 ? static_cast<float>(resolved.height) : 512.0f;
+        const float fit = std::min(availW / nw, availH / nh);
+        const float w = nw * fit;
+        const float h = nh * fit;
+        const ImVec2 pos(rMin.x + (availW - w) * 0.5f, rMin.y + (availH - h) * 0.5f);
+
+        // Only retarget channels when RenderPage actually split the list
+        // (guards against any future call site outside RenderPage).
+        const bool split = dl->_Splitter._Count > 1;
+        if (split) {
+            dl->ChannelsSetCurrent(0);
+        }
+
+        if (resolved.movie) {
+            // Timeline-animated symbol: composite this frame's quads scaled
+            // into the fitted rectangle (same scheme as the inline image path).
+            const int frame = static_cast<int>(ImGui::GetTime() * resolved.movie->FrameRate());
+            static std::vector<SWFVectorMovie::FrameDraw> s_draws;
+            resolved.movie->BuildFrameDraws(frame, s_draws);
+            const float sx = resolved.width > 0 ? w / static_cast<float>(resolved.width) : 1.0f;
+            const float sy = resolved.height > 0 ? h / static_cast<float>(resolved.height) : 1.0f;
+            for (const auto& fd : s_draws) {
+                auto texIt = resolved.charTex.find(fd.image);
+                if (texIt == resolved.charTex.end()) {
+                    continue;
+                }
+                const ImU32 tint = IM_COL32(static_cast<int>(fd.mulR * 255.0f),
+                                            static_cast<int>(fd.mulG * 255.0f),
+                                            static_cast<int>(fd.mulB * 255.0f),
+                                            static_cast<int>(fd.mulA * 255.0f));
+                dl->AddImageQuad(texIt->second,
+                                 ImVec2(pos.x + fd.x0 * sx, pos.y + fd.y0 * sy),
+                                 ImVec2(pos.x + fd.x1 * sx, pos.y + fd.y1 * sy),
+                                 ImVec2(pos.x + fd.x2 * sx, pos.y + fd.y2 * sy),
+                                 ImVec2(pos.x + fd.x3 * sx, pos.y + fd.y3 * sy),
+                                 ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), tint);
+            }
+        } else {
+            dl->AddImage(resolved.tex, pos, ImVec2(pos.x + w, pos.y + h));
+        }
+
+        if (split) {
+            dl->ChannelsSetCurrent(1);
+        }
     }
 
     // Renders the page for a given slot index
@@ -966,8 +1044,12 @@ namespace MCMWidgetRenderer {
             // Library preset manager). Those need a live Scaleform stage we
             // don't have, so a native ImGui recreation takes over the control.
             FallUIHudEditor::RenderImageControl(ctrl.imageLibName, ctrl.imageClassName);
-        } else if (ctrl.type == "image" && IsSuppressedDecorativeImage(ctrl.imageClassName)) {
-            // Intentionally rendered as nothing — see IsSuppressedDecorativeImage.
+        } else if (ctrl.type == "image" && IsInvisibleShimImage(ctrl.imageClassName)) {
+            // Intentionally rendered as nothing — see IsInvisibleShimImage.
+        } else if (ctrl.type == "image" && IsIntroBackdropImage(ctrl.imageClassName)) {
+            // FallUI landing-page brand art: drawn behind the page's controls
+            // instead of flowing inline. Consumes no layout space.
+            RenderIntroBackdrop(ctrl);
         } else if (ctrl.type == "image") {
             // Resolve the texture from either the Flash library (MCM's real
             // form) or a loose image file. `nativeW/H` hold the source image's
@@ -1266,7 +1348,20 @@ namespace MCMWidgetRenderer {
     }
 
     // --- Page rendering ---
+    static void RenderPageControls(const MCMConfigParser::MCMPage& page, ModRenderContext& ctx);
+
+    // Wraps the control loop in a 2-channel draw-list split so intro backdrop
+    // images (RenderIntroBackdrop) can paint into channel 0 — behind every
+    // control on the page — regardless of their position in the control list.
     static void RenderPage(const MCMConfigParser::MCMPage& page, ModRenderContext& ctx) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->ChannelsSplit(2);
+        dl->ChannelsSetCurrent(1);
+        RenderPageControls(page, ctx);
+        dl->ChannelsMerge();
+    }
+
+    static void RenderPageControls(const MCMConfigParser::MCMPage& page, ModRenderContext& ctx) {
         const auto& ctrls = page.controls;
 
         // No search active — render everything as-is.
@@ -1400,11 +1495,26 @@ namespace MCMWidgetRenderer {
         // dispatch close for the old page and open for the new one — mirroring
         // the real MCM's per-mod menu events.
         if (s_renderedModThisFrame != s_currentOpenMod) {
+            // Legacy parameterless OnMCMOpen fires when the first legacy page
+            // comes on screen — the real MCM sends it when its UI opens. Fired
+            // before the per-mod OnMCMMenuOpen, matching the AS3 order.
+            if (s_currentOpenMod.empty() && !s_renderedModThisFrame.empty()) {
+                MCMPapyrusAPI::DispatchMCMOpen();
+            }
             if (!s_currentOpenMod.empty()) {
                 MCMPapyrusAPI::DispatchMenuClose(s_currentOpenMod);
                 // Leaving a page destroys the original Flash apps too — drop
                 // the FallUI editor session so reopening reloads from the INIs.
                 FallUIHudEditor::ResetSession();
+            }
+            // Legacy OnMCMClose fires when the user leaves MCM entirely (menu
+            // closed or navigated to a non-MCM page). Native mods hang their
+            // "re-read my settings INI now" logic off this event — e.g. Baka
+            // Fullscreen Pip-Boy's MCMQuest calls UpdateSettings() on it — so
+            // without it, changes made in our pages only applied after a
+            // game restart.
+            if (!s_currentOpenMod.empty() && s_renderedModThisFrame.empty()) {
+                MCMPapyrusAPI::DispatchMCMClose();
             }
             if (!s_renderedModThisFrame.empty()) {
                 MCMPapyrusAPI::DispatchMenuOpen(s_renderedModThisFrame);
