@@ -35,6 +35,13 @@ public:
     static bool IsReloadPending();
     static void PerformReload();
 
+    // Live reload: throttled (~1/sec) scan of the plugin Fonts folder that
+    // detects files added, removed, or overwritten in place since the last
+    // call. Intended to be polled every frame while the Settings window is
+    // open (see UI::RenderConfigWindow) so callers can refresh their font
+    // list / rebuild the atlas without requiring a game restart.
+    static bool PollForChanges();
+
     // Builds the font atlas, degrading glyph coverage and retrying if the
     // result would exceed D3D11's 16384-px texture limit (a CJK-capable font
     // can bake 20k+ glyphs across three sizes and overflow it — that used to

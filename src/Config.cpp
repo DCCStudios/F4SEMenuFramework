@@ -43,7 +43,13 @@ void Config::Init() {
     auto menuStyleStr = Utils::toUpperCase(ini->GetString("MenuStyle", "skyrimDefault"));
 
     MenuStyles = Theme::GetJsonFiles();
-    Config::MenuStyle = Utils::indexOf(Config::MenuStyles, Utils::toUpperCase(menuStyleStr));
+    // Utils::indexOf returns -1 if the saved theme name no longer matches
+    // any file on disk (e.g. it was deleted/renamed) — fall back to the
+    // first available theme rather than leaving MenuStyle as an
+    // out-of-bounds index (Config::LoadStyle indexes MenuStyles[MenuStyle]
+    // with no bounds check).
+    const int resolvedStyleIdx = Utils::indexOf(Config::MenuStyles, menuStyleStr);
+    Config::MenuStyle = (resolvedStyleIdx >= 0) ? resolvedStyleIdx : 0;
 
     ini->SetSection("Fonts");  
     PrimaryFont = ini->GetString("PrimaryFont", "MainFont.ttf");
@@ -69,7 +75,6 @@ void Config::Init() {
     }
 
     delete ini;
-    delete[] menuStyleStr;
 }
 
 void Config::Save() {

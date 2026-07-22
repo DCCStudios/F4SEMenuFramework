@@ -1068,8 +1068,8 @@ Also ensure the framework is installed:
 Fallout 4/Data/F4SE/Plugins/F4SEMenuFramework.dll
 Fallout 4/Data/F4SE/Plugins/F4SEMenuFramework.ini
 Fallout 4/Data/F4SE/Plugins/F4SEMenuFrameworkStrings.json
-Fallout 4/Data/F4SE/Plugins/Fonts/                      (font files)
-Fallout 4/Data/F4SE/Plugins/F4SEMenuFrameworkThemes/    (theme files)
+Fallout 4/Data/F4SE/Plugins/F4SEMenuFramework/Fonts/    (font files, live-reloaded)
+Fallout 4/Data/F4SE/Plugins/F4SEMenuFramework/Themes/   (theme files, live-reloaded)
 Fallout 4/Data/F4SE/Plugins/F4SEMenuFramework/Gamepad/  (button glyphs)
 Fallout 4/Data/Interface/F4SEFramework.swf              (pause-menu button; optional)
 ```

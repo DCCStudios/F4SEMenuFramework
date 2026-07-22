@@ -219,8 +219,8 @@ Pause-menu SWF: see `swf/build.ps1` and `swf/src/F4SEFrameworkPause.as`.
 | `Data\F4SE\Plugins\F4SEMenuFramework.dll` | Framework |
 | `Data\F4SE\Plugins\F4SEMenuFramework.ini` | Toggle keys, fonts, MCM compat, gamepad glyph style |
 | `Data\F4SE\Plugins\F4SEMenuFrameworkStrings.json` | UI strings |
-| `Data\F4SE\Plugins\F4SEMenuFrameworkThemes\*.json` | Themes |
-| `Data\F4SE\Plugins\Fonts\*.ttf` | Fonts referenced by INI |
+| `Data\F4SE\Plugins\F4SEMenuFramework\Themes\*.json` | Themes (live-reloaded — see the folder's `README.md`) |
+| `Data\F4SE\Plugins\F4SEMenuFramework\Fonts\*.ttf` | Fonts referenced by INI (live-reloaded) |
 | `Data\F4SE\Plugins\F4SEMenuFramework\Gamepad\*.png` | Button glyphs for the hint bar |
 | `Data\Interface\F4SEFramework.swf` | Pause-menu **"F4SE Framework"** button |
 | `Data\Scripts\MCM.pex` (+ source) | Optional when native MCM is **not** installed |

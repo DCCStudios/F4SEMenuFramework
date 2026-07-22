@@ -1,23 +1,24 @@
 #include "Utils.h"
 
+#include <algorithm>
+#include <cctype>
+
 int Utils::indexOf(const std::vector<std::string>& list, const std::string& v) {
     auto it = std::find(list.begin(), list.end(), v);
-    if (it == list.end()) return 0;
+    if (it == list.end()) return -1;
     return static_cast<int>(std::distance(list.begin(), it));
 }
-char* Utils::toUpperCase(const char* str) {
+
+std::string Utils::toUpperCase(const char* str) {
     if (str == nullptr) {
-        return nullptr;
+        return std::string();
     }
 
-    char* upper_str = new char[strlen(str) + 1];
-    if (upper_str == nullptr) {
-        return nullptr;
-    }
-    for (int i = 0; str[i] != '\0'; i++) {
-        upper_str[i] = std::toupper((unsigned char)str[i]);
-    }
-    upper_str[strlen(str)] = '\0';
-
-    return upper_str;
+    // Returning std::string (rather than a caller-owned `new char[]`, as
+    // this used to) avoids the memory leak every single call site had: none
+    // of them ever freed the buffer this returned.
+    std::string upper(str);
+    std::transform(upper.begin(), upper.end(), upper.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return upper;
 }

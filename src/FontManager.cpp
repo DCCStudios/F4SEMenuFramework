@@ -10,11 +10,18 @@
 #include <windows.h>
 
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <system_error>
+#include <unordered_map>
 
 #define ICON_MIN_FA 0xe005
 #define ICON_MAX_FA 0xf8ff
+
+// Plugin-shipped fonts now live under F4SE/Plugins/F4SEMenuFramework/Fonts —
+// grouped with the framework's other asset folders (Themes, Gamepad) instead
+// of sitting loose in F4SE/Plugins.
+static constexpr const char* kPluginFontsDir = "Data/F4SE/Plugins/F4SEMenuFramework/Fonts";
 
 // Same resolution as MCMRegistry: Custom.ini / Fallout4.ini / GetINISetting.
 static std::string GameLanguage() {
@@ -171,7 +178,7 @@ FontContainer FontManager::LoadFonts(ImGuiIO& io, float size) {
         wchar_t winDirW[MAX_PATH]{};
         ::GetWindowsDirectoryW(winDirW, MAX_PATH);
         const std::filesystem::path systemFontsDir = std::filesystem::path(winDirW) / "Fonts";
-        const std::filesystem::path pluginFontsDir = "Data/F4SE/Plugins/Fonts";
+        const std::filesystem::path pluginFontsDir = kPluginFontsDir;
 
         auto mergeFallbackFont = [&](std::initializer_list<const char*> candidates) {
             for (const char* file : candidates) {
@@ -247,7 +254,7 @@ void FontManager::ProcessFont() {
 
 ImFont* FontManager::GetFont(ImGuiIO& io, std::string name, float size, const ImFontConfig* font_cfg = NULL,
                 const ImWchar* glyph_ranges = NULL) {
-    std::string path = "Data/F4SE/Plugins/Fonts/" + name;
+    std::string path = std::string(kPluginFontsDir) + "/" + name;
     if (std::filesystem::exists(path)) {
         return io.Fonts->AddFontFromFileTTF(path.c_str(), size, font_cfg, glyph_ranges);
     }
@@ -266,7 +273,7 @@ static std::string FontPathUtf8(const std::filesystem::path& p) {
 
 std::vector<std::string> FontManager::GetAvailableFonts() {
     std::vector<std::string> fonts;
-    const std::string dir = "Data/F4SE/Plugins/Fonts/";
+    const std::string dir = std::string(kPluginFontsDir) + "/";
     if (!std::filesystem::exists(dir)) {
         return fonts;
     }
@@ -286,6 +293,50 @@ std::vector<std::string> FontManager::GetAvailableFonts() {
     }
     std::sort(fonts.begin(), fonts.end());
     return fonts;
+}
+
+// --- Live reload -----------------------------------------------------------
+// Snapshot of every file in the plugin Fonts folder (filename -> last-write
+// time), used to detect changes since the last poll. Kept as a plain map
+// rather than re-scanning-and-comparing-to-a-vector so both "a file was
+// added/removed" and "a file was overwritten in place" (same name, new
+// bytes, newer mtime) are caught with one comparison.
+static std::unordered_map<std::string, std::filesystem::file_time_type> s_fontSnapshot;
+static std::chrono::steady_clock::time_point s_lastFontPoll{};
+static bool s_fontSnapshotPrimed = false;
+
+bool FontManager::PollForChanges() {
+    // Throttled to once a second — this is called every frame the Settings
+    // window is open, and a full directory scan every frame would be wasteful.
+    const auto now = std::chrono::steady_clock::now();
+    if (s_fontSnapshotPrimed && now - s_lastFontPoll < std::chrono::seconds(1)) {
+        return false;
+    }
+    s_lastFontPoll = now;
+
+    std::unordered_map<std::string, std::filesystem::file_time_type> current;
+    const std::string dir = std::string(kPluginFontsDir) + "/";
+    if (std::filesystem::exists(dir)) {
+        try {
+            for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+                if (!entry.is_regular_file()) continue;
+                std::error_code ec;
+                const auto mtime = entry.last_write_time(ec);
+                if (ec) continue;
+                current[FontPathUtf8(entry.path().filename())] = mtime;
+            }
+        } catch (const std::system_error& e) {
+            logger::warn("[FontManager] Live-reload scan aborted: {}", e.what());
+        }
+    }
+
+    // The very first poll just primes the snapshot — there is nothing to
+    // "reload" relative to, since nothing has been observed yet.
+    const bool wasPrimed = s_fontSnapshotPrimed;
+    s_fontSnapshotPrimed = true;
+    const bool changed = wasPrimed && (current != s_fontSnapshot);
+    s_fontSnapshot = std::move(current);
+    return changed;
 }
 
 void FontManager::RequestReload() {

@@ -8,6 +8,8 @@
 #include "Translations.h"
 #include "GameLock.h"
 #include "FontManager.h"
+#include "Theme.h"
+#include "Utils.h"
 #include "Config.h"
 #include "GamepadInput.h"
 #include "GamepadGlyphs.h"
@@ -608,6 +610,45 @@ void UI::RenderConfigWindow() {
 
         // ... all your combo boxes and settings ...
 
+        // Live reload: while this window is open, periodically rescan the
+        // Themes folder (~1/sec, throttled inside Theme::PollForChanges) so
+        // a theme file dropped in, removed, or edited shows up without a
+        // restart. The active selection is preserved by NAME rather than
+        // index, since adding/removing files can shift index order.
+        if (Theme::PollForChanges()) {
+            const std::string activeStyleName =
+                (Config::MenuStyle >= 0 && Config::MenuStyle < static_cast<int>(Config::MenuStyles.size()))
+                    ? Config::MenuStyles[Config::MenuStyle]
+                    : std::string();
+
+            Config::MenuStyles = Theme::GetJsonFiles();
+
+            const int restoredIdx = Utils::indexOf(Config::MenuStyles, activeStyleName);
+            Config::MenuStyle = (restoredIdx >= 0) ? restoredIdx : 0;
+
+            // Purely diagnostic: PollForChanges() firing is otherwise invisible
+            // in the log, which made it impossible to tell "the scan never saw
+            // the new file" apart from "the file appeared but was never
+            // selected" when a live-reload test didn't visibly do anything.
+            {
+                std::string listStr;
+                for (const auto& s : Config::MenuStyles) {
+                    if (!listStr.empty()) listStr += ", ";
+                    listStr += s;
+                }
+                logger::info("[Theme] Live-reload list refresh -> [{}] (was '{}', now index {})", listStr,
+                            activeStyleName, Config::MenuStyle);
+            }
+
+            // Reapply in case it was the active theme's own JSON that changed.
+            // Guard against an empty list (e.g. every theme file was just
+            // deleted) — Config::LoadStyle() indexes MenuStyles[MenuStyle]
+            // with no bounds check, so calling it here would be UB.
+            if (!Config::MenuStyles.empty()) {
+                Config::LoadStyle();
+            }
+        }
+
         std::vector<const char*> styleNames;
         styleNames.reserve(Config::MenuStyles.size());
 
@@ -625,6 +666,15 @@ void UI::RenderConfigWindow() {
         {
             static std::vector<std::string> availableFonts = FontManager::GetAvailableFonts();
             static int selectedFontIdx = -1;
+
+            // Live reload: same idea as the theme poll above — refresh the
+            // font list and rebuild the atlas when a font file is added,
+            // removed, or overwritten in place, without requiring a restart.
+            if (FontManager::PollForChanges()) {
+                availableFonts = FontManager::GetAvailableFonts();
+                FontManager::RequestReload();
+                selectedFontIdx = -1;  // re-resolve below; list order may have shifted
+            }
 
             // Resolve current selection from Config::PrimaryFont on first use.
             if (selectedFontIdx < 0) {
