@@ -11,6 +11,7 @@
 #include <cctype>
 #include <codecvt>
 #include <locale>
+#include <system_error>
 
 namespace MCMTranslation {
 
@@ -48,6 +49,28 @@ namespace MCMTranslation {
         return s_language;
     }
 
+    // Convert a UTF-16 LE wstring to a UTF-8 std::string
+    static std::string WideToUtf8(const std::wstring& wstr) {
+        if (wstr.empty()) return {};
+        int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
+            static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
+        if (sizeNeeded <= 0) return {};
+        std::string result(sizeNeeded, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
+            static_cast<int>(wstr.size()), result.data(), sizeNeeded, nullptr, nullptr);
+        return result;
+    }
+
+    // Windows path.string() converts via the ANSI code page and throws
+    // std::system_error (ERROR_NO_UNICODE_TRANSLATION / 1113) when a path
+    // component can't be represented — common with CJK/Cyrillic translation
+    // filenames under Data/Interface/Translations. u8string() is UTF-8 and
+    // does not throw for valid Unicode paths.
+    static std::string PathUtf8(const std::filesystem::path& p) {
+        const auto u8 = p.u8string();
+        return std::string(u8.begin(), u8.end());
+    }
+
     static std::string ReadLanguageFromIniFile(const wchar_t* fileName) {
         wchar_t docs[MAX_PATH]{};
         // CSIDL_PERSONAL is the same Documents folder the game (and MO2 USVFS)
@@ -56,10 +79,13 @@ namespace MCMTranslation {
             return {};
         }
         const auto path = std::filesystem::path(docs) / L"My Games" / L"Fallout4" / fileName;
-        char buf[64]{};
-        ::GetPrivateProfileStringA("General", "sLanguage", "", buf, static_cast<DWORD>(sizeof(buf)),
-            path.string().c_str());
-        return NormalizeLanguage(buf);
+        // Wide API: Documents usernames can contain non-ANSI characters; the
+        // old GetPrivateProfileStringA(path.string()) path both threw and
+        // could fail to open the INI for those users.
+        wchar_t buf[64]{};
+        ::GetPrivateProfileStringW(L"General", L"sLanguage", L"", buf,
+            static_cast<DWORD>(sizeof(buf) / sizeof(buf[0])), path.c_str());
+        return NormalizeLanguage(WideToUtf8(buf));
     }
 
     std::string ResolveGameLanguage(const std::string& optionalSettingFallback) {
@@ -79,18 +105,6 @@ namespace MCMTranslation {
             return fromSetting;
         }
         return "en";
-    }
-
-    // Convert a UTF-16 LE wstring to a UTF-8 std::string
-    static std::string WideToUtf8(const std::wstring& wstr) {
-        if (wstr.empty()) return {};
-        int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
-            static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
-        if (sizeNeeded <= 0) return {};
-        std::string result(sizeNeeded, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
-            static_cast<int>(wstr.size()), result.data(), sizeNeeded, nullptr, nullptr);
-        return result;
     }
 
     // ------------------------------------------------------------------
@@ -303,7 +317,9 @@ namespace MCMTranslation {
     // (e.g. "UneducatedShooter_de.txt" -> "de"). Empty when the stem has no
     // plausible suffix (no underscore, or the tail isn't 2-5 letters).
     static std::string LanguageSuffixOf(const std::filesystem::path& file) {
-        auto stem = file.stem().string();
+        // Must not use path.string() — see PathUtf8. Stem comparison only
+        // needs the UTF-8 bytes of the filename; language suffixes are ASCII.
+        auto stem = PathUtf8(file.stem());
         auto us = stem.rfind('_');
         if (us == std::string::npos) return {};
         std::string tail = stem.substr(us + 1);
@@ -333,7 +349,7 @@ namespace MCMTranslation {
             for (const auto& entry : std::filesystem::directory_iterator(dir)) {
                 if (!entry.is_regular_file()) continue;
 
-                auto ext = entry.path().extension().string();
+                const auto ext = PathUtf8(entry.path().extension());
                 if (ext != ".txt" && ext != ".TXT") continue;
 
                 const std::string suffix = LanguageSuffixOf(entry.path());
@@ -344,8 +360,10 @@ namespace MCMTranslation {
                 }
                 // Other languages' files are skipped, as the game would.
             }
-        } catch (const std::filesystem::filesystem_error&) {
-            // Directory enumeration can fail under virtual filesystems (MO2 USVFS)
+        } catch (const std::system_error&) {
+            // filesystem_error derives from system_error. Enumeration can fail
+            // under MO2 USVFS; path.string()-style ACP failures used to escape
+            // a filesystem_error-only catch and CTD the game on InitGameData.
         }
 
         for (const auto* group : { &baseFiles, &langFiles }) {

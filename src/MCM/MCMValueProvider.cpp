@@ -51,6 +51,23 @@ namespace MCMValueProvider {
             static_cast<int>(source.type), what);
     }
 
+    // path::string() converts through the process ANSI code page and THROWS
+    // std::system_error (ERROR_NO_UNICODE_TRANSLATION) rather than returning a
+    // lossy result when a path component can't be represented there — modName
+    // comes from a directory-enumerated MCM mod folder and can be non-ANSI
+    // (CJK/Cyrillic-named mods). CSimpleIniA::LoadFile needs a narrow path for
+    // its internal fopen(), so we can't simply substitute UTF-8 bytes (those
+    // would silently fail to open on a non-UTF8-active-codepage system) —
+    // instead, try the conversion and skip that layer (falling back to
+    // defaults) rather than letting the exception escape and CTD the game.
+    static std::optional<std::string> TryPathNarrow(const std::filesystem::path& p) {
+        try {
+            return p.string();
+        } catch (const std::system_error&) {
+            return std::nullopt;
+        }
+    }
+
     // Loads the layered settings INI for one mod into a fresh CSimpleIniA.
     // Layer order (later loads override earlier keys):
     //   1. Data/MCM/Config/<Mod>/settings.ini        — mod-shipped defaults
@@ -64,25 +81,27 @@ namespace MCMValueProvider {
         bool loaded = false;
 
         auto defaultsPath = MCMScanner::GetScanBasePath() / modName / "settings.ini";
-        if (std::filesystem::exists(defaultsPath) &&
-            ini->LoadFile(defaultsPath.string().c_str()) >= 0) {
+        if (auto narrow = TryPathNarrow(defaultsPath);
+            narrow && std::filesystem::exists(defaultsPath) && ini->LoadFile(narrow->c_str()) >= 0) {
             loaded = true;
             logger::debug("[MCMValueProvider] Loaded default settings.ini for '{}'", modName);
+        } else if (!narrow) {
+            logger::warn("[MCMValueProvider] '{}' default settings path is not representable "
+                         "in the system code page — skipping that layer", modName);
         }
 
         auto legacyUserPath = MCMScanner::GetUserSettingsBasePath() / modName / "settings.ini";
-        if (std::filesystem::exists(legacyUserPath) &&
-            ini->LoadFile(legacyUserPath.string().c_str()) >= 0) {
+        if (auto narrow = TryPathNarrow(legacyUserPath);
+            narrow && std::filesystem::exists(legacyUserPath) && ini->LoadFile(narrow->c_str()) >= 0) {
             loaded = true;
             logger::debug("[MCMValueProvider] Loaded legacy user settings for '{}'", modName);
         }
 
         auto flatUserPath = MCMScanner::GetUserSettingsBasePath() / (modName + ".ini");
-        if (std::filesystem::exists(flatUserPath) &&
-            ini->LoadFile(flatUserPath.string().c_str()) >= 0) {
+        if (auto narrow = TryPathNarrow(flatUserPath);
+            narrow && std::filesystem::exists(flatUserPath) && ini->LoadFile(narrow->c_str()) >= 0) {
             loaded = true;
-            logger::info("[MCMValueProvider] Loaded user settings for '{}' ({})",
-                modName, flatUserPath.string());
+            logger::info("[MCMValueProvider] Loaded user settings for '{}' ({})", modName, *narrow);
         }
 
         return loaded ? std::move(ini) : nullptr;
@@ -126,6 +145,15 @@ namespace MCMValueProvider {
     // sliders reset to 0" incident). Our own SimpleIni reader is BOM-tolerant,
     // which is why the translated menus still showed the correct values while
     // the native MCM did not. Heal any file we polluted.
+    // path::string() converts through the process ANSI code page on Windows
+    // and throws std::system_error (not filesystem_error) for a filename that
+    // code page can't represent (e.g. a mod's ModName.ini using non-Latin
+    // characters). u8string() is UTF-8 and never throws for a valid path.
+    static std::string ValueProviderPathUtf8(const std::filesystem::path& p) {
+        const auto u8 = p.u8string();
+        return std::string(u8.begin(), u8.end());
+    }
+
     static void StripBOMs() {
         const auto dir = MCMScanner::GetUserSettingsBasePath();
         std::error_code ec;
@@ -134,32 +162,38 @@ namespace MCMValueProvider {
         }
 
         std::size_t repaired = 0;
-        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-            if (ec) break;
-            if (!entry.is_regular_file()) continue;
-            auto path = entry.path();
-            if (path.extension() != L".ini") continue;
+        try {
+            for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                if (ec) break;
+                if (!entry.is_regular_file()) continue;
+                auto path = entry.path();
+                if (path.extension() != L".ini") continue;
 
-            std::ifstream in(path, std::ios::binary);
-            if (!in.is_open()) continue;
-            std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-            in.close();
+                std::ifstream in(path, std::ios::binary);
+                if (!in.is_open()) continue;
+                std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                in.close();
 
-            if (data.size() < 3 ||
-                static_cast<unsigned char>(data[0]) != 0xEF ||
-                static_cast<unsigned char>(data[1]) != 0xBB ||
-                static_cast<unsigned char>(data[2]) != 0xBF) {
-                continue;  // no BOM — untouched by the bug
+                if (data.size() < 3 ||
+                    static_cast<unsigned char>(data[0]) != 0xEF ||
+                    static_cast<unsigned char>(data[1]) != 0xBB ||
+                    static_cast<unsigned char>(data[2]) != 0xBF) {
+                    continue;  // no BOM — untouched by the bug
+                }
+
+                std::ofstream out(path, std::ios::binary | std::ios::trunc);
+                if (!out.is_open()) {
+                    logger::warn("[MCMValueProvider] Cannot repair BOM in '{}' (file locked?)",
+                        ValueProviderPathUtf8(path));
+                    continue;
+                }
+                out.write(data.data() + 3, static_cast<std::streamsize>(data.size() - 3));
+                ++repaired;
+                logger::info("[MCMValueProvider] Stripped UTF-8 BOM from '{}'",
+                    ValueProviderPathUtf8(path.filename()));
             }
-
-            std::ofstream out(path, std::ios::binary | std::ios::trunc);
-            if (!out.is_open()) {
-                logger::warn("[MCMValueProvider] Cannot repair BOM in '{}' (file locked?)", path.string());
-                continue;
-            }
-            out.write(data.data() + 3, static_cast<std::streamsize>(data.size() - 3));
-            ++repaired;
-            logger::info("[MCMValueProvider] Stripped UTF-8 BOM from '{}'", path.filename().string());
+        } catch (const std::system_error& e) {
+            logger::warn("[MCMValueProvider] BOM-repair scan aborted: {}", e.what());
         }
 
         if (repaired > 0) {

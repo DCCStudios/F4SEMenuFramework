@@ -2081,16 +2081,28 @@ namespace FallUIHudEditor {
     static void ScanImportableLayouts() {
         s_ed.importableLayouts.clear();
         std::error_code ec;
-        for (fs::directory_iterator it(ImportableLayoutsDir(), ec), end; !ec && it != end;
-             it.increment(ec)) {
-            if (!it->is_regular_file(ec)) continue;
-            auto p = it->path();
-            std::string ext = p.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (ext == ".ini") {
-                s_ed.importableLayouts.push_back(p.stem().string());
+        try {
+            for (fs::directory_iterator it(ImportableLayoutsDir(), ec), end; !ec && it != end;
+                 it.increment(ec)) {
+                if (!it->is_regular_file(ec)) continue;
+                auto p = it->path();
+                // extension()/stem() .string() convert via the ANSI code page
+                // and throw std::system_error for non-representable characters
+                // (user-renamed HUD layout presets can contain anything);
+                // u8string() is UTF-8 and never throws.
+                auto toUtf8 = [](const fs::path& part) {
+                    const auto u8 = part.u8string();
+                    return std::string(u8.begin(), u8.end());
+                };
+                std::string ext = toUtf8(p.extension());
+                std::transform(ext.begin(), ext.end(), ext.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (ext == ".ini") {
+                    s_ed.importableLayouts.push_back(toUtf8(p.stem()));
+                }
             }
+        } catch (const std::system_error&) {
+            // Leave whatever was collected before the failing entry.
         }
         std::sort(s_ed.importableLayouts.begin(), s_ed.importableLayouts.end());
         std::error_code ec2;

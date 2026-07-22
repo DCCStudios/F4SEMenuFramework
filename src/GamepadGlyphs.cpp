@@ -59,8 +59,16 @@ namespace GamepadGlyphs {
         if (!file) return 0;
 
         auto path = GetGlyphDirectory() / file;
+        // TextureLoader ultimately converts this string UTF-8 -> UTF-16
+        // (TextureLoader.cpp's convertToWChar uses codecvt_utf8_utf16), so it
+        // wants UTF-8 here, not path::string()'s ANSI-code-page narrow
+        // conversion — which would also throw std::system_error if the
+        // install path (derived from GetModuleFileNameW) has a character the
+        // process ANSI code page can't represent (e.g. a non-Latin Windows
+        // username). u8string() is both correct for the consumer and safe.
         // TextureLoader caches by path string, so repeated calls are cheap.
-        return TextureLoader::GetTexture(path.string());
+        const auto u8 = path.u8string();
+        return TextureLoader::GetTexture(std::string(u8.begin(), u8.end()));
     }
 
     // ------------------------------------------------------------------

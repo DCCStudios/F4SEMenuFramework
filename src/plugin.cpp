@@ -61,6 +61,10 @@ void MessageCallback(F4SE::MessagingInterface::Message* msg)
         // Scans for MCM mod configs, checks for native MCM conflicts,
         // parses configs, and registers translated menus.
         MCMRegistry::Init();
+
+        // Pause-menu list row can be inserted from C++ as soon as ESC opens
+        // the menu (does not wait for F4SEFramework.swf). Needs RE::UI.
+        PauseMenuButton::RegisterMenuEvents();
         break;
     }
     default:

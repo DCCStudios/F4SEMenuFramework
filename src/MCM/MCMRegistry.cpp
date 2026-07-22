@@ -167,8 +167,10 @@ namespace MCMRegistry {
                         (mod.modName + "_" + MCMTranslation::GetLanguage() + ".txt");
                     std::ifstream probe(langFile);
                     if (probe.is_open()) {
+                        const auto langNameU8 = langFile.filename().u8string();
                         logger::info("[MCMRegistry] Using translation file '{}' for '{}' ({} keys in merged map)",
-                            langFile.filename().string(), mod.modName, interfaceTranslations.size());
+                            std::string(langNameU8.begin(), langNameU8.end()),
+                            mod.modName, interfaceTranslations.size());
                     }
                 }
 

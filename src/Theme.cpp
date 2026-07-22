@@ -1,9 +1,21 @@
 #include <imgui.h>
 
+#include <filesystem>
 #include <fstream>
+#include <system_error>
 #include <nlohmann/json.hpp>
 #include "Theme.h"
 #include "Utils.h"
+
+// std::filesystem::path::string() converts through the process ANSI code
+// page on Windows and throws std::system_error (not filesystem_error) if a
+// theme filename can't be represented there. u8string() is UTF-8 and never
+// throws for a valid path.
+static std::string ThemePathUtf8(const std::filesystem::path& p) {
+    const auto u8 = p.u8string();
+    return std::string(u8.begin(), u8.end());
+}
+
 static ImVec4 HexToImVec4(const std::string& hex) {
     unsigned int v = 0;
     std::stringstream ss;
@@ -19,13 +31,20 @@ static ImVec4 HexToImVec4(const std::string& hex) {
 std::vector<std::string> Theme::GetJsonFiles() {
     std::string folder = "Data\\F4SE\\plugins\\F4SEMenuFrameworkThemes";
     std::vector<std::string> out;
-    for (const auto& entry : std::filesystem::directory_iterator(folder)) {
-        if (entry.is_regular_file()) {
-            auto path = entry.path();
-            if (path.extension() == ".json") {
-                out.push_back(Utils::toUpperCase(path.stem().string().c_str()));
+    if (!std::filesystem::exists(folder)) {
+        return out;
+    }
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+            if (entry.is_regular_file()) {
+                auto path = entry.path();
+                if (path.extension() == ".json") {
+                    out.push_back(Utils::toUpperCase(ThemePathUtf8(path.stem()).c_str()));
+                }
             }
         }
+    } catch (const std::system_error& e) {
+        logger::warn("[Theme] Theme directory scan aborted: {}", e.what());
     }
     return out;
 }

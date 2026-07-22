@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <system_error>
 
 #define ICON_MIN_FA 0xe005
 #define ICON_MAX_FA 0xf8ff
@@ -253,21 +254,35 @@ ImFont* FontManager::GetFont(ImGuiIO& io, std::string name, float size, const Im
     return nullptr;
 }
 
+// std::filesystem::path::string() converts through the process ANSI code
+// page on Windows and THROWS std::system_error (not filesystem_error) when a
+// filename has a character that code page can't represent — plausible here
+// since users drop arbitrarily-named font files (CJK/Cyrillic font names)
+// into this folder. u8string() is UTF-8 and never throws for a valid path.
+static std::string FontPathUtf8(const std::filesystem::path& p) {
+    const auto u8 = p.u8string();
+    return std::string(u8.begin(), u8.end());
+}
+
 std::vector<std::string> FontManager::GetAvailableFonts() {
     std::vector<std::string> fonts;
     const std::string dir = "Data/F4SE/Plugins/Fonts/";
     if (!std::filesystem::exists(dir)) {
         return fonts;
     }
-    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
-        if (!entry.is_regular_file()) continue;
-        auto ext = entry.path().extension().string();
-        // Case-insensitive .ttf / .otf check
-        std::transform(ext.begin(), ext.end(), ext.begin(),
-                       [](char c) { return static_cast<char>(std::tolower(c)); });
-        if (ext == ".ttf" || ext == ".otf") {
-            fonts.push_back(entry.path().filename().string());
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+            if (!entry.is_regular_file()) continue;
+            auto ext = FontPathUtf8(entry.path().extension());
+            // Case-insensitive .ttf / .otf check
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](char c) { return static_cast<char>(std::tolower(c)); });
+            if (ext == ".ttf" || ext == ".otf") {
+                fonts.push_back(FontPathUtf8(entry.path().filename()));
+            }
         }
+    } catch (const std::system_error& e) {
+        logger::warn("[FontManager] Font directory scan aborted: {}", e.what());
     }
     std::sort(fonts.begin(), fonts.end());
     return fonts;

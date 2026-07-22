@@ -1326,12 +1326,21 @@ namespace MCMWidgetRenderer {
                 std::error_code ec;
                 // MCM paths are game-root relative (e.g. "data\\Interface\\ItemSorter")
                 std::filesystem::path dir = std::filesystem::current_path() / ctrl.filesPath;
-                for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-                    if (!it->is_regular_file(ec)) continue;
-                    std::string name = it->path().filename().string();
-                    if (matchesMask(name, ctrl.filesMask)) {
-                        cache.names.push_back(std::move(name));
+                try {
+                    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+                        if (!it->is_regular_file(ec)) continue;
+                        // filename().string() converts via the ANSI code page and
+                        // throws std::system_error for non-representable
+                        // characters (user-supplied file lists can be anything);
+                        // u8string() is UTF-8 and never throws.
+                        const auto u8 = it->path().filename().u8string();
+                        std::string name(u8.begin(), u8.end());
+                        if (matchesMask(name, ctrl.filesMask)) {
+                            cache.names.push_back(std::move(name));
+                        }
                     }
+                } catch (const std::system_error&) {
+                    // Leave whatever was collected before the failing entry.
                 }
                 std::sort(cache.names.begin(), cache.names.end());
             }
