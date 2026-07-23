@@ -1,21 +1,21 @@
 # Making your own F4SE Menu Framework theme
 
 This folder holds the theme files that show up in the **Menu Style** dropdown
-in the framework's Settings window. A theme is just a small JSON text file —
+in the framework's Settings window. A theme is just a small JSON text file -
 no coding, compiling, or special tools needed. This guide walks a complete
 beginner through making one from scratch.
 
 ## The fastest way to start
 
 1. Copy `classic.json` and rename the copy to something like `MyTheme.json`.
-   `classic.json` is intentionally empty — it's the smallest possible valid
+   `classic.json` is intentionally empty - it's the smallest possible valid
    theme, and the safest starting point.
-2. Open your new file in any plain text editor (Notepad, Notepad++, VS Code —
+2. Open your new file in any plain text editor (Notepad, Notepad++, VS Code -
    anything that saves plain `.txt`-style text, not Word).
 3. In-game, open the framework's Settings window and pick your new theme
    from the **Menu Style** dropdown.
 4. Edit the JSON, save the file, and switch back to the game. Within about a
-   second the change appears automatically — you don't need to reselect it
+   second the change appears automatically - you don't need to reselect it
    from the dropdown. Keep the game window and your editor open side by side
    and iterate like that.
 
@@ -23,12 +23,12 @@ That auto-refresh is "live reload": the framework rechecks this folder about
 once a second while the Settings window is open, so adding, removing, or
 editing a theme file just works. If you make a typo that breaks the JSON, the
 framework quietly ignores the broken parts (or falls back to the built-in
-dark theme) instead of crashing — so feel free to experiment.
+dark theme) instead of crashing - so feel free to experiment.
 
 ## The two things a theme file can control
 
 A theme file is a single JSON object with up to two sections. Both are
-optional — leave either one out (or leave the whole file as `{}`) and the
+optional - leave either one out (or leave the whole file as `{}`) and the
 framework just keeps its built-in dark-theme defaults for whatever you didn't
 specify.
 
@@ -45,7 +45,7 @@ specify.
 ### 1. Shape settings (top level, optional)
 
 These are plain numbers that control rounding, border thickness, and
-padding — the "shape" of widgets rather than their color. You will rarely
+padding - the "shape" of widgets rather than their color. You will rarely
 need more than a handful of these. The most useful ones:
 
 | Key | What it does |
@@ -61,23 +61,23 @@ need more than a handful of these. The most useful ones:
 | `ItemSpacing` | `[x, y]` gap between consecutive widgets. |
 
 Every other shape key ImGui supports also works here (`Alpha`,
-`IndentSpacing`, `TabRounding`, etc.) — see `fallout4.json` in this folder
+`IndentSpacing`, `TabRounding`, etc.) - see `fallout4.json` in this folder
 for a file that sets most of them, and use it as a reference for spelling
 and value shape (single numbers vs. `[x, y]` pairs).
 
 ### 2. Colors (`"ImGuiCol"`, optional)
 
 This is a map of ImGui color-slot names to colors, written as hex strings in
-**`"#RRGGBBAA"`** order — red, green, blue, then **alpha (opacity) last**.
+**`"#RRGGBBAA"`** order - red, green, blue, then **alpha (opacity) last**.
 That trailing alpha pair is easy to miss if you're used to web/CSS hex colors
-(which are usually `#RRGGBB` or `#AARRGGBB`) — get it backwards and a color
+(which are usually `#RRGGBB` or `#AARRGGBB`) - get it backwards and a color
 will look fully transparent or fully solid when you didn't intend that.
 
 - `FF` = fully opaque, `00` = fully invisible, `80` ≈ 50% see-through.
 - Example: `"WindowBg": "#101010CC"` = a near-black window background
   (`10,10,10`) that's mostly but not fully opaque (`CC` ≈ 80%).
 
-You don't need to set every color — anything you leave out keeps the
+You don't need to set every color - anything you leave out keeps the
 built-in dark-theme value for that slot. Start with just the handful below
 and add more only if you want to fine-tune further.
 
@@ -97,7 +97,7 @@ and add more only if you want to fine-tune further.
 | `TitleBg` / `TitleBgActive` | Window title bar background. |
 
 For the **complete** list of valid color keys, open `fallout4.json` in this
-same folder — it sets nearly all of them and doubles as a full reference for
+same folder - it sets nearly all of them and doubles as a full reference for
 exact spelling (the keys must match ImGui's names exactly, e.g.
 `ButtonHovered`, not `Button_Hovered` or `buttonHovered`). Any key that's
 misspelled is silently ignored rather than causing an error, so if a color
@@ -126,17 +126,17 @@ first.
      }
    }
    ```
-3. Save the file, switch to the game, and open Settings — `PURPLE` is
+3. Save the file, switch to the game, and open Settings - `PURPLE` is
    already in the **Menu Style** dropdown. Select it.
 4. Not quite right? Switch back to your editor, tweak a hex value, save,
-   and switch back to the game — no reselecting needed, it updates live.
+   and switch back to the game - no reselecting needed, it updates live.
 
 ## Where these files live
 
 Theme files live in this folder:
 `Data/F4SE/Plugins/F4SEMenuFramework/Themes/`
 next to the framework's font folder
-(`Data/F4SE/Plugins/F4SEMenuFramework/Fonts/`, which works the same way —
+(`Data/F4SE/Plugins/F4SEMenuFramework/Fonts/`, which works the same way -
 drop in a `.ttf`/`.otf` file and it appears in the Settings **Font**
 dropdown, live, with no restart needed either).
 
@@ -145,16 +145,16 @@ dropdown, live, with no restart needed either).
 - **My theme doesn't show up in the dropdown.** Check the file actually ends
   in `.json` (not `.json.txt`, which some editors add silently) and that
   it's directly inside this `Themes` folder, not a subfolder.
-- **The dropdown shows my filename in ALL CAPS.** That's expected — the
+- **The dropdown shows my filename in ALL CAPS.** That's expected - the
   framework displays theme names uppercased. Name the file however you like
   (`Purple.json` is fine).
 - **A color looks invisible / fully solid when I expected a mix.** Almost
-  always the alpha (last two hex characters) is `00` or `FF` — see the
+  always the alpha (last two hex characters) is `00` or `FF` - see the
   color-format note above.
 - **Nothing I change seems to apply.** Make sure the JSON is valid: every
   `{`, `[`, and `"` needs a matching closing character, and every entry
   except the last one in a list needs a trailing comma. A JSON validator
   (search "json validator" online, or most text editors flag this
   automatically) will catch this instantly. An invalid file is never applied
-  — the framework falls back to defaults rather than crashing, but that also
+  - the framework falls back to defaults rather than crashing, but that also
   means your changes just won't appear until the syntax is fixed.

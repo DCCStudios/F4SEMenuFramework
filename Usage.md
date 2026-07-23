@@ -1,4 +1,4 @@
-# F4SE Menu Framework — Usage
+# F4SE Menu Framework - Usage
 
 Practical recipes for plugin authors. For a full project setup, see [PLUGIN_DEVELOPMENT_GUIDE.md](PLUGIN_DEVELOPMENT_GUIDE.md). For players and MCM JSON authors, see [README.md](README.md).
 
@@ -240,7 +240,7 @@ F4SEMenuFramework::Hotkeys::Unregister(handle);
 
 - Hotkeys fire on **first press** only (not key-repeat).
 - Keyboard hotkeys are **suppressed** while any **blocking** framework window is open (`BlockUserInput == true`).
-- Multiple hotkeys may share one scan code — **all** matching callbacks run.
+- Multiple hotkeys may share one scan code - **all** matching callbacks run.
 - INI values use names (`F2`, `HOME`, `LB`), not raw numbers.
 - Prefer this API over rolling your own `AddInputEvent` toggle unless you need full `RE::InputEvent` access.
 
@@ -263,7 +263,7 @@ Data/MCM/Config/MyMod/keybinds.json     ; optional
 Players with F4SE Menu Framework see your UI under **MCM Mod Configs (Legacy) → \<displayName\>**.  
 Players with native MCM use the classic MCM. One package serves both.
 
-Settings live in `Data/MCM/Settings/MyMod.ini` (created/updated when the user changes values). Do not put user saves only in `Config\...\settings.ini` — that file is for **defaults**.
+Settings live in `Data/MCM/Settings/MyMod.ini` (created/updated when the user changes values). Do not put user saves only in `Config\...\settings.ini` - that file is for **defaults**.
 
 ### If your Papyrus script calls `MCM.*`
 
@@ -279,16 +279,16 @@ Use the normal MCM script API (`GetModSettingInt`, `SetModSettingFloat`, `Regist
 ### Control and image support notes
 
 - All standard MCM control types are supported, plus **`dropdownFiles`** (directory-listing dropdown: `valueOptions.path` relative to the game root, `valueOptions.mask` wildcard; stores the file name with extension) and the per-control **`modName`** override (the control targets another mod's settings INI, as in real MCM).
-- **`image` controls** can use loose files (`imagePath`) or Flash library symbols (`imageLibName` / `imageClassName`). Symbol lookup tries embedded bitmaps first, then falls back to a built-in **vector-shape / timeline-animation rasterizer** — so gradient art, vector logos, and tween animations from `lib.swf` / `logo.swf` display without any bitmap export. Animation driven by ActionScript (not the timeline) cannot be replayed.
+- **`image` controls** can use loose files (`imagePath`) or Flash library symbols (`imageLibName` / `imageClassName`). Symbol lookup tries embedded bitmaps first, then falls back to a built-in **vector-shape / timeline-animation rasterizer** - so gradient art, vector logos, and tween animations from `lib.swf` / `logo.swf` display without any bitmap export. Animation driven by ActionScript (not the timeline) cannot be replayed.
 - **Action params** support MCM's typed cast prefixes (`"{i}42"`, `"{f}1.5"`, `"{b}1"`, `"{s}text"`, `"{i}{value}"` etc.) in `config.json` and `keybinds.json`; they are passed to Papyrus with the correct types. `"{value}"` embedded in longer strings is substituted as text.
 - **All MCM action types** work, including `CallExternalFunction` (Scaleform functions F4SE plugins register on `root.f4se.plugins.<plugin>`), used by mods like FallSouls and Floating Damage.
 - Full-page branding images (`M8r.View.*Intro*` classes) are drawn as **page backdrops** behind the controls, like in the Scaleform MCM.
-- FallUI's embedded Flash apps — the **HUD layout editor** (`M8r.Controller.FallUIHUD`) and **Icon Library** (`M8r.View.FallUIIconLibrary`) — are recreated natively in ImGui. They read and write the exact same `Data/MCM/Settings/FallUIHUD.ini` formats as the originals, so layouts and presets round-trip with real FallUI.
+- FallUI's embedded Flash apps - the **HUD layout editor** (`M8r.Controller.FallUIHUD`) and **Icon Library** (`M8r.View.FallUIIconLibrary`) - are recreated natively in ImGui. They read and write the exact same `Data/MCM/Settings/FallUIHUD.ini` formats as the originals, so layouts and presets round-trip with real FallUI.
 
 ### If you are a C++ plugin author
 
 - Prefer the framework’s own `AddSectionItem` pages for native ImGui UX.
-- Or ship an MCM `config.json` and let the translation layer host it — useful for supporting players who already know MCM tooling.
+- Or ship an MCM `config.json` and let the translation layer host it - useful for supporting players who already know MCM tooling.
 - Do **not** assume translated pages exist: users can disable `[MCMCompat] Enabled`, or native MCM may be present with coexistence off.
 
 ### Player toggles (also in framework Settings)
@@ -309,7 +309,7 @@ When both are installed and `MCMCompatWhenNativePresent = true`:
 - Settings files are shared; the framework reloads INIs when its overlay opens.
 - Hotkey rebinds can sync with the running MCM while the pause menu movie is loaded (opening via the pause-menu **F4SE Framework** button keeps that movie under the overlay).
 
-When coexistence is **off** (default with `mcm.dll` present), the framework does not register translated MCM pages — native MCM remains the single UI.
+When coexistence is **off** (default with `mcm.dll` present), the framework does not register translated MCM pages - native MCM remains the single UI.
 
 ---
 
