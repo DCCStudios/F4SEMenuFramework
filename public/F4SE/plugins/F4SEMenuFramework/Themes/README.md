@@ -13,8 +13,7 @@ beginner through making one from scratch.
 2. Open your new file in any plain text editor (Notepad, Notepad++, VS Code —
    anything that saves plain `.txt`-style text, not Word).
 3. In-game, open the framework's Settings window and pick your new theme
-   from the **Menu Style** dropdown. It appears automatically — new files are
-   picked up **without restarting the game**.
+   from the **Menu Style** dropdown.
 4. Edit the JSON, save the file, and switch back to the game. Within about a
    second the change appears automatically — you don't need to reselect it
    from the dropdown. Keep the game window and your editor open side by side
