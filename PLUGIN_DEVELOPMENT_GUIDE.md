@@ -1,6 +1,6 @@
-# F4SE Menu Framework 3 - Plugin Development Guide
+# F4SE Menu Framework 3: Plugin Development Guide
 
-This guide covers everything you need to build an F4SE plugin that adds in-game ImGui menus via the **F4SE Menu Framework 3**. The framework handles DirectX 11 hooking, ImGui rendering, input capture, window management, named hotkeys, and (optionally) translating existing MCM configs into ImGui pages. Your plugin registers callbacks and draws widgets - or ships a normal MCM package and lets the translation layer host it.
+This guide covers everything you need to build an F4SE plugin that adds in-game ImGui menus via the **F4SE Menu Framework 3**. The framework handles DirectX 11 hooking, ImGui rendering, input capture, window management, named hotkeys, and (optionally) translating existing MCM configs into ImGui pages. Your plugin registers callbacks and draws widgets, or ships a normal MCM package and lets the translation layer host it.
 
 ---
 
@@ -8,7 +8,7 @@ This guide covers everything you need to build an F4SE plugin that adds in-game 
 
 1. [Prerequisites](#1-prerequisites)
 2. [Project Setup from Scratch](#2-project-setup-from-scratch)
-3. [The Consumer Header - F4SEMenuFramework.h](#3-the-consumer-header--f4semenufreameworkh)
+3. [The Consumer Header: F4SEMenuFramework.h](#3-the-consumer-header-f4semenuframeworkh)
 4. [Plugin Entry Point](#4-plugin-entry-point)
 5. [Registering Menus](#5-registering-menus)
 6. [Drawing UI with ImGuiMCP](#6-drawing-ui-with-imguimcp)
@@ -23,7 +23,7 @@ This guide covers everything you need to build an F4SE plugin that adds in-game 
 15. [Build and Deploy](#15-build-and-deploy)
 16. [Gotchas and F4SE-Specific Differences](#16-gotchas-and-f4se-specific-differences)
 17. [Complete Minimal Plugin](#17-complete-minimal-plugin)
-18. [Framework Internals - How the Hooks Work](#18-framework-internals--how-the-hooks-work)
+18. [Framework Internals: How the Hooks Work](#18-framework-internals-how-the-hooks-work)
 
 > Shorter copy-paste recipes (including hotkeys and MCM notes for non-C++ authors): [Usage.md](Usage.md). Player / overview: [README.md](README.md).
 
@@ -102,7 +102,7 @@ YourWorkspace/
 }
 ```
 
-These are the dependencies required by CommonLibF4. Your plugin doesn't need to use them directly - they're pulled in transitively.
+These are the dependencies required by CommonLibF4. Your plugin doesn't need to use them directly, they're pulled in transitively.
 
 ### CMakePresets.json
 
@@ -292,14 +292,14 @@ Change `"MyF4SEPlugin.log"` to match your plugin name.
 
 ---
 
-## 3. The Consumer Header - F4SEMenuFramework.h
+## 3. The Consumer Header: F4SEMenuFramework.h
 
-Copy `F4SEMenuFramework.h` from the framework's `resources/` folder into your `include/` directory. This is the **only file you need** from the framework - you do NOT link against `F4SEMenuFramework.lib`.
+Copy `F4SEMenuFramework.h` from the framework's `resources/` folder into your `include/` directory. This is the **only file you need** from the framework, you do NOT link against `F4SEMenuFramework.lib`.
 
 The header works via **runtime dynamic linking**: it resolves `F4SEMenuFramework.dll` with `GetModuleHandleW` on each `GetProcAddress` path and then `GetProcAddress(...)` for every ImGui function and framework API. This means:
 
 - Your plugin has **zero compile-time dependency** on the framework DLL.
-- The framework DLL must be **mapped into the process** before your draw callbacks run (F4SE loads it as a normal plugin; load order vs. your DLL can vary - the header re-queries the module handle instead of caching it once at static init).
+- The framework DLL must be **mapped into the process** before your draw callbacks run (F4SE loads it as a normal plugin; load order vs. your DLL can vary, the header re-queries the module handle instead of caching it once at static init).
 - You should always check `F4SEMenuFramework::IsInstalled()` before calling any framework functions (`IsInstalled` is true when `GetModuleHandleW` succeeds, not when `exists("Data/...")` relative to CWD).
 
 The header provides these namespaces:
@@ -316,7 +316,7 @@ The header provides these namespaces:
 
 ## 4. Plugin Entry Point
 
-### F4SE Menu Framework - register after all plugins load
+### F4SE Menu Framework: register after all plugins load
 
 `F4SEMenuFramework::IsInstalled()` resolves `F4SEMenuFramework.dll` with `GetModuleHandleW`. Plugins are loaded from `plugins.txt` **in order**; if your DLL is listed **before** `F4SEMenuFramework.dll`, your `F4SEPlugin_Load` runs before the framework’s `Load`, so the framework module is **not** in the process yet and registration in `Load` will no-op. **Defer** `SetSection` / `AddSectionItem` to the F4SE messaging interface **`kPostLoad`** or **`kPostPostLoad`** (dispatched from `PluginManager::LoadComplete()` only after every plugin has finished `F4SEPlugin_Load`). Use a static “registered once” guard to avoid duplicate pages.
 
@@ -330,7 +330,7 @@ namespace Plugin {
     static constexpr auto VERSION = REL::Version{ 1, 0, 0 };
 }
 
-// Called first - validate environment, reject editor/wrong runtime
+// Called first: validate environment, reject editor/wrong runtime
 extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Query(
     const F4SE::QueryInterface* a_f4se,
     F4SE::PluginInfo* a_info)
@@ -345,7 +345,7 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Query(
     return true;
 }
 
-// Called second - do all initialization here
+// Called second: do all initialization here
 extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(
     const F4SE::LoadInterface* a_f4se)
 {
@@ -361,7 +361,7 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(
                 return;
             }
             if (msg->type == F4SE::MessagingInterface::kPostLoad) {
-                // F4SEMenuFramework.dll is mapped after all F4SEPlugin_Load calls - register UI here
+                // F4SEMenuFramework.dll is mapped after all F4SEPlugin_Load calls; register UI here
                 // if your plugin name sorts before F4SEMenuFramework in plugins.txt.
                 UI::Register();
             }
@@ -410,7 +410,7 @@ namespace UI {
 
 void UI::Register() {
     if (!F4SEMenuFramework::IsInstalled()) {
-        return;  // framework not present - fail gracefully
+        return;  // framework not present; fail gracefully
     }
 
     // Set the section name (shown as a top-level group in the Mod Control Panel)
@@ -442,7 +442,7 @@ void __stdcall UI::MyPage::Render() {
 
 ## 6. Drawing UI with ImGuiMCP
 
-All ImGui functions are accessed through the `ImGuiMCP::` namespace. This is a **full ImGui API** - every widget, layout, and drawing function is available.
+All ImGui functions are accessed through the `ImGuiMCP::` namespace. This is a **full ImGui API**: every widget, layout, and drawing function is available.
 
 ### Common Widgets
 
@@ -621,13 +621,13 @@ void __stdcall UI::MyWindow::RenderWindow() {
 The `MENU_WINDOW` handle (which is `F4SEMenuFramework::Model::WindowInterface*`) has two atomic fields:
 
 ```cpp
-Handle->IsOpen;          // std::atomic<bool> - set to true/false to open/close
-Handle->BlockUserInput;  // std::atomic<bool> - set at creation via AddWindow's 2nd arg
+Handle->IsOpen;          // std::atomic<bool>: set to true/false to open/close
+Handle->BlockUserInput;  // std::atomic<bool>: set at creation via AddWindow's 2nd arg
 ```
 
 ### Non-Pausing Windows (Gameplay Overlays)
 
-Pass `false` as the second argument to `AddWindow()` to create a window that **does not pause game input**. The window stays visible during normal gameplay - even after the Mod Control Panel is closed. This is ideal for debug overlays, live stat displays, or any information panel the player should see while playing.
+Pass `false` as the second argument to `AddWindow()` to create a window that **does not pause game input**. The window stays visible during normal gameplay, even after the Mod Control Panel is closed. This is ideal for debug overlays, live stat displays, or any information panel the player should see while playing.
 
 ```cpp
 // UI.h
@@ -698,7 +698,7 @@ void __stdcall UI::DebugOverlay::RenderWindow() {
 | Centered on screen (modal-style) | Anchored to a corner (overlay-style) |
 | Good for settings/editors | Good for debug info, live stats, HUDs |
 
-**Important:** Non-pausing windows are rendered by the framework every frame, independently of the Mod Control Panel. You do NOT need a HUD overlay or manual `Begin/End` calls in your section renderer - the framework calls your window's render function automatically when `Handle->IsOpen` is true.
+**Important:** Non-pausing windows are rendered by the framework every frame, independently of the Mod Control Panel. You do NOT need a HUD overlay or manual `Begin/End` calls in your section renderer, the framework calls your window's render function automatically when `Handle->IsOpen` is true.
 
 **Do NOT render windows inside section callbacks.** A common mistake is to call `ImGuiMCP::Begin/End` directly inside an `AddSectionItem` render callback to create a "popout." This does not work correctly because section callbacks only execute while the Mod Control Panel is open, and the window will fight with the framework's own window management. Always use `AddWindow()` for any standalone floating panel.
 
@@ -819,7 +819,7 @@ void __stdcall OnToggleMyOverlay() {
 void UI::RegisterHotkeys() {
     if (!F4SEMenuFramework::IsInstalled()) return;
 
-    // id must be unique across mods - use a prefix
+    // id must be unique across mods; use a prefix
     F4SEMenuFramework::Hotkeys::Register("MyMod.ToggleOverlay", 0x3C, OnToggleMyOverlay); // F2
 
     // Optional gamepad binding (4096 = A; same codes as framework Settings)
@@ -835,7 +835,7 @@ Call `RegisterHotkeys()` from the same **`kPostLoad` / `kPostPostLoad`** callbac
 unsigned int code = F4SEMenuFramework::Hotkeys::GetBinding("MyMod.ToggleOverlay");
 
 if (F4SEMenuFramework::Hotkeys::HasConflict(0x43, "MyMod.ToggleOverlay")) {
-    // F9 already used - confirm in your UI, or call SetBinding anyway
+    // F9 already used; confirm in your UI, or call SetBinding anyway
 }
 F4SEMenuFramework::Hotkeys::SetBinding("MyMod.ToggleOverlay", 0x43);
 ```
@@ -854,10 +854,10 @@ F4SEMenuFramework::Hotkeys::Unregister(handle);
 | Persistence | Names in INI (`F2`, `LB`, …), not raw integers |
 | When callbacks run | First press only; keyboard hotkeys suppressed while a **blocking** framework window is open |
 | Same id twice | Updates callback; returns existing handle |
-| Same key, different ids | Allowed - every matching callback fires |
+| Same key, different ids | Allowed, every matching callback fires |
 | Gamepad connected? | `F4SEMenuFramework::IsControllerConnected()` |
 
-Copy-paste tables and more examples: [Usage.md - Plugin Hotkey API](Usage.md#plugin-hotkey-api).
+Copy-paste tables and more examples: [Usage.md: Plugin Hotkey API](Usage.md#plugin-hotkey-api).
 
 ---
 
@@ -885,7 +885,7 @@ Data/MCM/Settings/MyMod.ini             ; user values (runtime; written by MCM o
 ### Runtime behavior (verified against this codebase)
 
 1. **Scan / build pages** runs during `kGameDataReady` via `MCMRegistry::Init()` when `Config::MCMCompatEnabled` is true.
-2. **Native MCM detection** is `GetModuleHandleA("mcm.dll")` - not plugin name matching.
+2. **Native MCM detection** is `GetModuleHandleA("mcm.dll")`, not plugin name matching.
 3. If `mcm.dll` is present and `MCMCompatWhenNativePresent` is false (default), translated pages are **not** registered (native MCM stays sole UI).
 4. If `mcm.dll` is **absent**, the framework registers `MCM.*` Papyrus natives (`GetModSetting*`, `SetModSetting*`, `RefreshMenu`, …) and `GetVersionCode()` returns **9**.
 5. If `mcm.dll` is present, Papyrus native registration is **skipped** so the real MCM owns those bindings.
@@ -895,12 +895,12 @@ Data/MCM/Settings/MyMod.ini             ; user values (runtime; written by MCM o
 
 Beyond the standard MCM control set, the translated pages support:
 
-- **`dropdownFiles`** - dropdown listing files on disk. `valueOptions.path` is relative to the game root, `valueOptions.mask` is a wildcard (e.g. `"path": "data\\Interface\\ItemSorter", "mask": "*.xml"`). The stored setting value is the file **name** including extension.
-- **Per-control `modName`** - a control-level `"modName"` makes that control read/write another mod's `Data/MCM/Settings/<modName>.ini` instead of the owning mod's, matching real MCM behavior.
+- **`dropdownFiles`**: dropdown listing files on disk. `valueOptions.path` is relative to the game root, `valueOptions.mask` is a wildcard (e.g. `"path": "data\\Interface\\ItemSorter", "mask": "*.xml"`). The stored setting value is the file **name** including extension.
+- **Per-control `modName`**: a control-level `"modName"` makes that control read/write another mod's `Data/MCM/Settings/<modName>.ini` instead of the owning mod's, matching real MCM behavior.
 - **`image` controls** resolve `(imageLibName, imageClassName)` in order: embedded bitmap in `lib.swf` → bitmap in `logo.swf` → **vector shapes / timeline animation** in `lib.swf` → same in `logo.swf` (new `SWFVectorMovie` CPU rasterizer). Static vector art is flattened to one texture; timeline tweens replay at the movie's frame rate. AS3-driven animation, morph shapes, text glyphs, filters, and masks are skipped with a log line. An empty or unresolved class name falls back to the SWF's main timeline.
-- **Typed action params**: string params with MCM's cast prefixes - `"{i}42"`, `"{f}1.5"`, `"{b}1"`, `"{s}text"`, and cast placeholders like `"{i}{value}"` - are decoded to the corresponding Papyrus type before dispatch (plain `"{value}"` keeps the control's native type). `"{value}"` embedded in longer strings (`"bConsole|{value}"`) is substituted as text, like MCM's AS3 `replace()`.
-- **All five MCM action types** are dispatched: `CallFunction`, `CallGlobalFunction`, `RunConsoleCommand`, `SendEvent`, and `CallExternalFunction` (invoked on the F4SE Scaleform object `root.f4se.plugins.<plugin>` from the game UI thread - same mechanism the real MCM uses).
-- **Backdrop images**: class names matching `M8r.View.*Intro*` (FallUI landing-page branding) are drawn as a page **backdrop** - fitted and centered behind the page's controls, consuming no layout space. `M8r.View.FixFileDropdown` renders nothing (invisible AS3 shim; its file-dropdown fix is native here).
+- **Typed action params**: string params with MCM's cast prefixes, `"{i}42"`, `"{f}1.5"`, `"{b}1"`, `"{s}text"`, and cast placeholders like `"{i}{value}"`, are decoded to the corresponding Papyrus type before dispatch (plain `"{value}"` keeps the control's native type). `"{value}"` embedded in longer strings (`"bConsole|{value}"`) is substituted as text, like MCM's AS3 `replace()`.
+- **All five MCM action types** are dispatched: `CallFunction`, `CallGlobalFunction`, `RunConsoleCommand`, `SendEvent`, and `CallExternalFunction` (invoked on the F4SE Scaleform object `root.f4se.plugins.<plugin>` from the game UI thread, same mechanism the real MCM uses).
+- **Backdrop images**: class names matching `M8r.View.*Intro*` (FallUI landing-page branding) are drawn as a page **backdrop**: fitted and centered behind the page's controls, consuming no layout space. `M8r.View.FixFileDropdown` renders nothing (invisible AS3 shim; its file-dropdown fix is native here).
 - **FallUI Flash apps**: the image controls `M8r.Controller.FallUIHUD` (HUD layout editor) and `M8r.View.FallUIIconLibrary` (Icon Library) are taken over by native ImGui recreations (`include/MCM/FallUIHudEditor.h`). Persisted data formats are identical to the Flash originals, so layouts round-trip with real FallUI and its runtime HUD swf applies them unchanged.
 
 ### INI / Settings UI
@@ -915,9 +915,9 @@ Toggles in the framework Settings window require a **game restart** to rescan.
 
 ### Pause-menu entry
 
-Shipping `Data/Interface/F4SEFramework.swf` adds an **"F4SE FRAMEWORK"** row to the ESC pause list (all caps, matching the vanilla entries). Selecting it opens the ImGui overlay **on top of** the pause menu (the pause menu is not dismissed - input to it is blocked while the overlay is open). That keeps MCM’s `root.mcm` object available for live hotkey sync when coexistence is on.
+Shipping `Data/Interface/F4SEFramework.swf` adds an **"F4SE FRAMEWORK"** row to the ESC pause list (all caps, matching the vanilla entries). Selecting it opens the ImGui overlay **on top of** the pause menu (the pause menu is not dismissed, input to it is blocked while the overlay is open). That keeps MCM’s `root.mcm` object available for live hotkey sync when coexistence is on.
 
-Player-oriented summary: [README.md - MCM translation layer](README.md#mcm-translation-layer).
+Player-oriented summary: [README.md: MCM translation layer](README.md#mcm-translation-layer).
 
 ---
 
@@ -1090,7 +1090,7 @@ If you're porting a plugin from the SKSE version, here are the key changes:
 |------|------|------|
 | Consumer header | `SKSEMenuFramework.h` | `F4SEMenuFramework.h` |
 | Framework namespace | `SKSEMenuFramework::` | `F4SEMenuFramework::` |
-| Install check | Often path `exists(...)` | `GetModuleHandleW(L"F4SEMenuFramework.dll")` via `IsInstalled()` - must be loaded in-process |
+| Install check | Often path `exists(...)` | `GetModuleHandleW(L"F4SEMenuFramework.dll")` via `IsInstalled()`, must be loaded in-process |
 | Entry point | `SKSEPluginLoad()` | `F4SEPlugin_Query()` + `F4SEPlugin_Load()` |
 | Data loaded event | `SKSE::MessagingInterface::kDataLoaded` | `F4SE::MessagingInterface::kGameDataReady` |
 | Input event cast | `event->AsButtonEvent()` | `event->As<RE::ButtonEvent>()` |
@@ -1107,13 +1107,13 @@ If you're porting a plugin from the SKSE version, here are the key changes:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Your plugin never registers a Mod Menu section (no crash), `IsInstalled()` is false | Older consumer headers used `std::filesystem::exists("Data/F4SE/Plugins/F4SEMenuFramework.dll")`, which is **relative to the process working directory** - MO2/modlist instances often launch with CWD **not** the game root, so the check fails even when the DLL is installed | Use a header where `IsInstalled()` is implemented as **`GetModuleHandleW(L"F4SEMenuFramework.dll")` (or base name) ≠ nullptr** - the framework must be **loaded in-process**, not merely present on disk. Also avoid caching `GetModuleHandle` in a **static** initialized at your DLL load: F4SE can load your plugin **before** `F4SEMenuFramework.dll` is mapped; resolve the module handle **per call** (or at least after `kGameDataReady`). |
+| Your plugin never registers a Mod Menu section (no crash), `IsInstalled()` is false | Older consumer headers used `std::filesystem::exists("Data/F4SE/Plugins/F4SEMenuFramework.dll")`, which is **relative to the process working directory**: MO2/modlist instances often launch with CWD **not** the game root, so the check fails even when the DLL is installed | Use a header where `IsInstalled()` is implemented as **`GetModuleHandleW(L"F4SEMenuFramework.dll")` (or base name) ≠ nullptr**, the framework must be **loaded in-process**, not merely present on disk. Also avoid caching `GetModuleHandle` in a **static** initialized at your DLL load: F4SE can load your plugin **before** `F4SEMenuFramework.dll` is mapped; resolve the module handle **per call** (or at least after `kGameDataReady`). |
 | ImGui overlay never appears, no crash | D3D11 `Present` hook installed on a dummy device VTable instead of the game's real swap chain | Hook `D3D11CreateDeviceAndSwapChain` via `write_call<5>` on call site `REL::ID(224250)+0x419` and patch the real swap chain's VTable inside (see §18) |
-| D3D11 IAT hook installed but thunk never called | Game caches the `D3D11CreateDeviceAndSwapChain` function pointer from the IAT during early init, before F4SE plugins load. Patching the IAT entry afterward has no effect | Use `write_call<5>` on the call site (`REL::ID(224250)+0x419`) instead of IAT replacement (`REL::ID(254484)`) - this patches the CALL instruction itself, which cannot be bypassed |
-| Crash on startup in `keyboardThunk` or `mouseThunk` (RCX=0) | `ImGui::GetIO()` called before `ImGui::CreateContext()` - input device poll hooks run before first `Present` call | Guard: `if (!initialized.load()) return;` in all input thunks |
+| D3D11 IAT hook installed but thunk never called | Game caches the `D3D11CreateDeviceAndSwapChain` function pointer from the IAT during early init, before F4SE plugins load. Patching the IAT entry afterward has no effect | Use `write_call<5>` on the call site (`REL::ID(224250)+0x419`) instead of IAT replacement (`REL::ID(254484)`), this patches the CALL instruction itself, which cannot be bypassed |
+| Crash on startup in `keyboardThunk` or `mouseThunk` (RCX=0) | `ImGui::GetIO()` called before `ImGui::CreateContext()`, input device poll hooks run before first `Present` call | Guard: `if (!initialized.load()) return;` in all input thunks |
 | Menu renders but mouse can't click anything | Game's `ClipCursor()` confines cursor to a narrow area | Hook `ClipCursor` via IAT (`REL::ID(641385)`) and pass full window rect when menu is open |
 | Menu renders but player still walks/shoots | Game still processing keyboard/mouse input | Set `RE::ControlMap::GetSingleton()->ignoreKeyboardMouse = true` when menu opens |
-| Toggle key doesn't open menu, no crash | Hotkey detection was in `BSInputDevice::Poll` hooks or `RE::InputEvent` processing, but those never receive keypress data usable for toggling | Move toggle key detection to `WndProcHook` via `WM_KEYDOWN` - extract scan code from `lParam` bits 16-23 and compare with DIK code. Both Shadow-Boost and GunMover use this pattern (see §18). Default shipped toggle is `BRACKETRIGHT` (`]`), not F1 - check `F4SEMenuFramework.ini`. |
+| Toggle key doesn't open menu, no crash | Hotkey detection was in `BSInputDevice::Poll` hooks or `RE::InputEvent` processing, but those never receive keypress data usable for toggling | Move toggle key detection to `WndProcHook` via `WM_KEYDOWN`, extract scan code from `lParam` bits 16-23 and compare with DIK code. Both Shadow-Boost and GunMover use this pattern (see §18). Default shipped toggle is `BRACKETRIGHT` (`]`), not F1, check `F4SEMenuFramework.ini`. |
 | Menu opens but game still processes input alongside ImGui | WndProc always calls the original `WndProc` even when menu is active | When menu is active, forward to `ImGui_ImplWin32_WndProcHandler` and `return true` to block the game. Only call original WndProc when menu is closed |
 
 ### Common Compile Errors and Fixes
@@ -1126,7 +1126,7 @@ If you're porting a plugin from the SKSE version, here are the key changes:
 | `'InputScalar' is not a member of 'ImGuiMCP'` | Ensure `F4SEMenuFramework.h` does NOT have `namespace ImGui {}` wrapping the function definitions (around line 3709). The functions must be directly inside `ImGuiMCP`. |
 | `'std::basic_ifstream' undefined` | Add `#include <fstream>` to PCH.h |
 | `'GetName' is not a member of 'RE::TESBoundObject'` | Use `dynamic_cast<RE::TESFullName*>(obj)->GetFullName()` instead |
-| `ITEM_REMOVE_REASON::kNone` not found | Use `static_cast<RE::ITEM_REMOVE_REASON>(0)` - the enum is only forward-declared |
+| `ITEM_REMOVE_REASON::kNone` not found | Use `static_cast<RE::ITEM_REMOVE_REASON>(0)`, the enum is only forward-declared |
 
 ---
 
@@ -1226,7 +1226,7 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(
     logger::info("{} v{} loading", Plugin::NAME, Plugin::VERSION.string());
     F4SE::Init(a_f4se);
 
-    // Defer UI registration until every plugin has finished Load - otherwise
+    // Defer UI registration until every plugin has finished Load; otherwise
     // IsInstalled() can be false if your DLL sorts before F4SEMenuFramework.
     F4SE::GetMessagingInterface()->RegisterListener(
         [](F4SE::MessagingInterface::Message* msg) {
@@ -1240,25 +1240,25 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(
 }
 ```
 
-Build it, drop the DLL into `Data/F4SE/Plugins/` (with the framework installed), launch with F4SE, and open the Mod Control Panel with the framework toggle key (shipped default: **`]` / `BRACKETRIGHT`** - see `F4SEMenuFramework.ini` / Settings).
+Build it, drop the DLL into `Data/F4SE/Plugins/` (with the framework installed), launch with F4SE, and open the Mod Control Panel with the framework toggle key (shipped default: **`]` / `BRACKETRIGHT`**, see `F4SEMenuFramework.ini` / Settings).
 
 ---
 
-## 18. Framework Internals - How the Hooks Work
+## 18. Framework Internals: How the Hooks Work
 
-This section documents how the framework hooks into the game engine. You don't need to do any of this in your consumer plugin - the framework handles it all. This is reference material for understanding what happens behind the scenes and for anyone maintaining or forking the framework.
+This section documents how the framework hooks into the game engine. You don't need to do any of this in your consumer plugin, the framework handles it all. This is reference material for understanding what happens behind the scenes and for anyone maintaining or forking the framework.
 
 ### D3D11 Present Hook via `write_call<5>`
 
 The framework hooks `D3D11CreateDeviceAndSwapChain` to intercept the game's real device creation, then patches the real swap chain's `Present` VTable entry.
 
-**Three approaches were tried - only the third works reliably:**
+**Three approaches were tried, only the third works reliably:**
 
-1. **Dummy null device trick** - fundamentally broken. The dummy device's VTable is a separate instance; patching and releasing it accomplishes nothing.
+1. **Dummy null device trick**: fundamentally broken. The dummy device's VTable is a separate instance; patching and releasing it accomplishes nothing.
 
-2. **IAT pointer replacement** (`REL::ID(254484)`) - the hook installs successfully but **never gets called**. The game resolves the `D3D11CreateDeviceAndSwapChain` function pointer from the IAT once during early initialization (before F4SE plugins load) and caches it. Patching the IAT entry after that point has no effect - the game calls through the cached pointer, not the IAT.
+2. **IAT pointer replacement** (`REL::ID(254484)`), the hook installs successfully but **never gets called**. The game resolves the `D3D11CreateDeviceAndSwapChain` function pointer from the IAT once during early initialization (before F4SE plugins load) and caches it. Patching the IAT entry after that point has no effect, the game calls through the cached pointer, not the IAT.
 
-3. **`write_call<5>` on the call site** (`REL::ID(224250) + 0x419`) - **this is what works.** It patches the actual CALL machine instruction at the point where the game invokes `D3D11CreateDeviceAndSwapChain`. This cannot be bypassed by pointer caching. GunMover uses this exact approach.
+3. **`write_call<5>` on the call site** (`REL::ID(224250) + 0x419`): **this is what works.** It patches the actual CALL machine instruction at the point where the game invokes `D3D11CreateDeviceAndSwapChain`. This cannot be bypassed by pointer caching. GunMover uses this exact approach.
 
 ```cpp
 // Allocate trampoline space (must be done in F4SEPlugin_Load before hook install)
@@ -1288,7 +1288,7 @@ Fallout 4 calls `ClipCursor()` every frame to lock the mouse cursor to the game 
 
 When a blocking menu is open, the framework sets `RE::ControlMap::GetSingleton()->ignoreKeyboardMouse = true`. This tells the game engine to stop processing keyboard and mouse input, preventing the player from walking, looking around, or firing while interacting with ImGui. It is reset to `false` when the menu closes.
 
-### WndProc Hook - Hotkey Detection and Input Forwarding
+### WndProc Hook: Hotkey Detection and Input Forwarding
 
 The framework replaces the game window's `WndProc` via `SetWindowLongPtrA` on the first `Present` call (after ImGui is initialized). The WndProc hook serves **two critical purposes**:
 
@@ -1296,7 +1296,7 @@ The framework replaces the game window's `WndProc` via `SetWindowLongPtrA` on th
 
 Both Shadow-Boost-FO4 and GunMover detect their hotkeys in WndProc, not through Bethesda's `RE::InputEvent` pipeline. This is the only reliable approach because:
 
-- `BSInputDevice::Poll` VTable hooks run during device polling, **before** the game builds the `InputEvent` chain - there are no events to read yet
+- `BSInputDevice::Poll` VTable hooks run during device polling, **before** the game builds the `InputEvent` chain, there are no events to read yet
 - Bethesda's `InputEvent` processing pipeline is internal and has no clean F4SE hook point equivalent to SKSE's `ProcessInputQueueHook`
 - WndProc receives all Windows keyboard messages regardless of game state, making it reliable for hotkey detection
 
@@ -1327,7 +1327,7 @@ if (menuIsActive) {
 return CallWindowProcA(originalWndProc, hWnd, uMsg, wParam, lParam);
 ```
 
-Returning `true` when the menu is active is critical - without it, both the game and ImGui process the same input simultaneously (the player moves/shoots while clicking menu widgets).
+Returning `true` when the menu is active is critical, without it, both the game and ImGui process the same input simultaneously (the player moves/shoots while clicking menu widgets).
 
 ### ImGui Initialization Order
 
@@ -1341,7 +1341,7 @@ Returning `true` when the menu is active is critical - without it, both the game
 | REL::ID | Function | Hook Type | Notes |
 |---------|----------|-----------|-------|
 | `224250` + `0x419` | `D3D11CreateDeviceAndSwapChain` call site | `write_call<5>` (trampoline) | **Use this one.** Patches the CALL instruction directly |
-| `254484` | `D3D11CreateDeviceAndSwapChain` IAT entry | IAT pointer replacement | **Does NOT work** - game caches the pointer before plugins load |
+| `254484` | `D3D11CreateDeviceAndSwapChain` IAT entry | IAT pointer replacement | **Does NOT work**: game caches the pointer before plugins load |
 | `641385` | `ClipCursor` IAT entry | IAT pointer replacement | Works (called per-frame, not cached) |
 | `325206` | `ControlMap` singleton pointer | Singleton access (read) | |
 | `IDXGISwapChain VTable[8]` | `Present` | VTable pointer replacement | Patched inside CreateDevice hook |
