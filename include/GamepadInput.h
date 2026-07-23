@@ -57,4 +57,16 @@ namespace GamepadInput {
     // Called from the Present hook every frame, render thread only.
     void InjectImGuiEvents();
 
+    // Rising-edge accessor for the gamepad X / Square button used as the
+    // "reset / unbind" action on a focused control.
+    //
+    // X is NOT fed to ImGui as ImGuiKey_GamepadFaceLeft, on purpose: ImGui
+    // hardwires ImGuiKey_NavGamepadMenu == ImGuiKey_GamepadFaceLeft, so letting
+    // ImGui see X made every reset/unbind press also trigger ImGui's window-
+    // switch / menu-layer toggle, throwing focus out of the pane the user was
+    // in. Instead the render-thread bridge records X's rising edge here and the
+    // reset/unbind call sites consume it directly. Returns true exactly once
+    // per physical press (the flag is cleared on read).
+    bool ConsumeResetUnbindEdge();
+
 }

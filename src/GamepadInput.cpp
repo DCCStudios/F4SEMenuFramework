@@ -327,6 +327,12 @@ namespace GamepadInput {
     static std::atomic<unsigned char>  s_navLeftTrigger{ 0 };
     static std::atomic<unsigned char>  s_navRightTrigger{ 0 };
 
+    // Rising edge of the X / Square button, computed on the render thread in
+    // InjectImGuiEvents and consumed by the reset/unbind control sites. See
+    // ConsumeResetUnbindEdge() / the header for why X is handled out-of-band
+    // instead of being fed to ImGui as GamepadFaceLeft.
+    static std::atomic<bool>           s_resetUnbindEdge{ false };
+
     static constexpr unsigned char TRIGGER_THRESHOLD = 128;
 
     static std::chrono::steady_clock::time_point s_lastTogglePress{};
@@ -384,6 +390,12 @@ namespace GamepadInput {
 
     bool IsControllerConnected() {
         return s_navConnected.load(std::memory_order_relaxed);
+    }
+
+    bool ConsumeResetUnbindEdge() {
+        // exchange => true at most once per physical press, so two different
+        // control sites can't both act on the same X press in one frame.
+        return s_resetUnbindEdge.exchange(false, std::memory_order_relaxed);
     }
 
     WORD GetCurrentButtons() {
@@ -623,6 +635,7 @@ namespace GamepadInput {
                 s_wasActive = false;
             }
             io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
+            s_resetUnbindEdge.store(false, std::memory_order_relaxed);
             return;
         }
 
@@ -646,7 +659,12 @@ namespace GamepadInput {
         mapButton(XINPUT_GAMEPAD_DPAD_RIGHT,     ImGuiKey_GamepadDpadRight);
         mapButton(XINPUT_GAMEPAD_A,              ImGuiKey_GamepadFaceDown);   // activate / edit
         mapButton(XINPUT_GAMEPAD_B,              ImGuiKey_GamepadFaceRight);  // cancel / back
-        mapButton(XINPUT_GAMEPAD_X,              ImGuiKey_GamepadFaceLeft);   // reset / unbind
+        // NOTE: X (XINPUT_GAMEPAD_X) is intentionally NOT mapped to
+        // ImGuiKey_GamepadFaceLeft. ImGui aliases GamepadFaceLeft as its
+        // NavGamepadMenu key (window-switch / menu-layer toggle), so feeding X
+        // to ImGui hijacked focus out of the current pane on every reset/unbind
+        // press. We record X's rising edge below and expose it via
+        // ConsumeResetUnbindEdge() for the control sites to read directly.
         mapButton(XINPUT_GAMEPAD_Y,              ImGuiKey_GamepadFaceUp);     // settings
         mapButton(XINPUT_GAMEPAD_LEFT_SHOULDER,  ImGuiKey_GamepadL1);         // pane left
         mapButton(XINPUT_GAMEPAD_RIGHT_SHOULDER, ImGuiKey_GamepadR1);         // pane right
@@ -654,6 +672,16 @@ namespace GamepadInput {
         mapButton(XINPUT_GAMEPAD_RIGHT_THUMB,    ImGuiKey_GamepadR3);
         mapButton(XINPUT_GAMEPAD_START,          ImGuiKey_GamepadStart);
         mapButton(XINPUT_GAMEPAD_BACK,           ImGuiKey_GamepadBack);
+
+        // X rising edge for reset/unbind (see header). Computed against the same
+        // previous-button snapshot used by mapButton, before it's updated.
+        {
+            const bool xNow = (buttons & XINPUT_GAMEPAD_X) != 0;
+            const bool xWas = (s_prevNavButtons & XINPUT_GAMEPAD_X) != 0;
+            if (xNow && !xWas) {
+                s_resetUnbindEdge.store(true, std::memory_order_relaxed);
+            }
+        }
         s_prevNavButtons = buttons;
 
         // Triggers — analog (ImGui uses these for tweak-fast/slow modifiers)

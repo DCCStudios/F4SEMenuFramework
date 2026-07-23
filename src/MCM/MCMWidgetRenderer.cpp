@@ -30,6 +30,7 @@
 #include <cmath>
 #include <cctype>
 #include <algorithm>
+#include <unordered_set>
 
 namespace MCMWidgetRenderer {
 
@@ -63,12 +64,31 @@ namespace MCMWidgetRenderer {
 
     // --- Hotkey capture state ---
     // When a hotkey control's rebind button is activated we enter capture mode:
-    // the next keyboard key (or gamepad button) becomes the new binding.
-    // ESC cancels; TAB (or gamepad X) unbinds.
+    // the next keyboard key (or mouse button) becomes the new binding.
+    // ESC cancels; TAB unbinds.
     static bool s_captureActive = false;
     static std::string s_captureHotkeyId;    // HotkeyManager id ("MCM.<mod>.<id>")
     static std::string s_captureStateKey;    // renderer state key of the control
     static std::string s_captureModName;
+
+    // Anti-"flash-close" guard. The button that starts capture is activated by
+    // some input — a mouse click, or (via ImGui nav) the keyboard Space/Enter
+    // or gamepad A. With keyboard activation, that key is STILL physically held
+    // on the next frame, and GetAsyncKeyState-based capture would bind it
+    // instantly, so the prompt appeared and vanished in one frame. To fix it we
+    // snapshot every virtual key that is already down on capture's first frame
+    // and refuse to bind any of them until it has been released at least once —
+    // only a genuinely fresh press after capture begins can bind. s_captureArmSnapshotPending
+    // triggers that snapshot on the first ProcessHotkeyCapture frame.
+    static bool s_captureArmSnapshotPending = false;
+    static std::unordered_set<int> s_captureHeldAtStart;  // VKs to ignore until released
+    // Mouse buttons (ImGui indices 0..4) held when capture began. Same purpose
+    // as s_captureHeldAtStart but for the mouse: the LEFT button in particular
+    // is what the user clicked to open capture, so it must not bind itself.
+    static bool s_captureMouseHeldAtStart[5] = {false, false, false, false, false};
+    // ImGui::GetTime() at the moment capture was armed; used for the left-click
+    // grace window (see kLeftClickGraceSec in ProcessHotkeyCapture).
+    static double s_captureArmedTime = 0.0;
 
     // --- Page open/close tracking for OnMCMMenuOpen/Close events ---
     static std::string s_renderedModThisFrame;  // set by RenderSlot each frame
@@ -647,6 +667,61 @@ namespace MCMWidgetRenderer {
     static void ProcessHotkeyCapture(ControlState& state) {
         if (!s_captureActive) return;
 
+        // First capture frame: snapshot every key currently held so the input
+        // that opened capture (mouse click, or Space/Enter/A via ImGui nav
+        // activation) can't be bound until it's physically released. Without
+        // this the prompt "flashed" — it bound the still-held activation key
+        // on the very next frame and closed immediately.
+        if (s_captureArmSnapshotPending) {
+            s_captureArmSnapshotPending = false;
+            s_captureHeldAtStart.clear();
+            for (int vk = 0x08; vk <= 0xFE; ++vk) {
+                if (GetAsyncKeyState(vk) & 0x8000) {
+                    s_captureHeldAtStart.insert(vk);
+                }
+            }
+            // Mouse buttons too: whichever button opened capture (normally
+            // LEFT — that's the click that activated the rebind button) must be
+            // released before it can be bound, so a single click can't select
+            // AND bind the same button. Force LEFT into the guard regardless of
+            // what IsMouseDown reports this frame, because ImGui buttons fire on
+            // release — by the time we arm, LEFT is already up, and without this
+            // an immediate re-click (or the tail of a double-click) could
+            // self-bind it.
+            for (int b = 0; b < 5; ++b) {
+                s_captureMouseHeldAtStart[b] = ImGui::IsMouseDown(b);
+            }
+            s_captureMouseHeldAtStart[ImGuiMouseButton_Left] = true;
+            s_captureArmedTime = ImGui::GetTime();
+            logger::info("[MCMWidgetRenderer] Hotkey capture armed for '{}' — ignoring {} key(s) held at start",
+                s_captureHotkeyId, s_captureHeldAtStart.size());
+        }
+
+        // Drop keys from the ignore set as soon as they're released, so a key
+        // that was held at start becomes bindable once the user lets go and
+        // presses it again.
+        if (!s_captureHeldAtStart.empty()) {
+            for (auto it = s_captureHeldAtStart.begin(); it != s_captureHeldAtStart.end();) {
+                if (!(GetAsyncKeyState(*it) & 0x8000)) {
+                    it = s_captureHeldAtStart.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        // Same release-guard for the mouse: clear a button's flag once it's up.
+        for (int b = 0; b < 5; ++b) {
+            if (s_captureMouseHeldAtStart[b] && !ImGui::IsMouseDown(b)) {
+                s_captureMouseHeldAtStart[b] = false;
+            }
+        }
+
+        // A key is bindable only if it's NOT still in the held-at-start set.
+        auto isIgnored = [&](int vk) {
+            return s_captureHeldAtStart.find(vk) != s_captureHeldAtStart.end();
+        };
+
         // Applies a captured code: conflict-check, bind, notify.
         auto applyBinding = [&](unsigned int code) {
             auto conflicts = HotkeyManager::GetConflicts(code, s_captureHotkeyId.c_str());
@@ -654,20 +729,23 @@ namespace MCMWidgetRenderer {
                 logger::info("[MCMWidgetRenderer] Hotkey '{}' now shares code 0x{:X} with {} other binding(s)",
                     s_captureHotkeyId, code, conflicts.size());
             }
+            logger::info("[MCMWidgetRenderer] Hotkey '{}' captured code 0x{:X}", s_captureHotkeyId, code);
             HotkeyManager::SetBinding(s_captureHotkeyId.c_str(), code);
             state.intVal = static_cast<int>(code);
             s_captureActive = false;
             MCMPapyrusAPI::DispatchSettingChanged(s_captureModName, s_captureStateKey);
         };
 
-        // ESC — cancel capture, keep the old binding
-        if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
+        // ESC — cancel capture, keep the old binding (only on a fresh press;
+        // an Esc held from before capture began must not insta-cancel).
+        if ((GetAsyncKeyState(VK_ESCAPE) & 0x8000) && !isIgnored(VK_ESCAPE)) {
+            logger::info("[MCMWidgetRenderer] Hotkey capture cancelled (Esc) for '{}'", s_captureHotkeyId);
             s_captureActive = false;
             return;
         }
 
-        // TAB — unbind
-        if (GetAsyncKeyState(VK_TAB) & 0x8000) {
+        // TAB — unbind (fresh press only, same reasoning as Esc)
+        if ((GetAsyncKeyState(VK_TAB) & 0x8000) && !isIgnored(VK_TAB)) {
             HotkeyManager::SetBinding(s_captureHotkeyId.c_str(), 0);
             state.intVal = 0;
             s_captureActive = false;
@@ -675,23 +753,30 @@ namespace MCMWidgetRenderer {
             return;
         }
 
-        // Mouse buttons — press edges only. The LEFT button is deliberately
-        // not capturable: clicking is how the capture UI itself is operated,
-        // so accepting it would instantly self-bind on any click (and a
-        // left-mouse gameplay bind is almost never what the user meant).
-        // A left-button bind made in the real MCM still imports and fires.
+        // Mouse buttons — press edges only, all five buttons capturable.
         // Codes follow the F4SE/Papyrus convention: 256 = left ... 260 = X2.
+        // LEFT needs extra care because clicking is how the capture UI itself
+        // is opened: the held-at-start guard blocks the opening click, and a
+        // short grace window after arming absorbs the tail of a double-click
+        // so the prompt can't instantly self-bind. A deliberate left click
+        // after that window binds normally.
+        static constexpr double kLeftClickGraceSec = 0.30;
         static constexpr struct { int imguiBtn; unsigned int code; } kMouseButtons[] = {
+            { ImGuiMouseButton_Left, 256 },
             { ImGuiMouseButton_Right, 257 },
             { ImGuiMouseButton_Middle, 258 },
             { 3, 259 },  // X1 / "Mouse 4"
             { 4, 260 },  // X2 / "Mouse 5"
         };
         for (const auto& mb : kMouseButtons) {
-            if (ImGui::IsMouseClicked(mb.imguiBtn, false)) {
-                applyBinding(mb.code);
-                return;
+            if (!ImGui::IsMouseClicked(mb.imguiBtn, false)) continue;
+            if (s_captureMouseHeldAtStart[mb.imguiBtn]) continue;  // held since before capture
+            if (mb.imguiBtn == ImGuiMouseButton_Left &&
+                (ImGui::GetTime() - s_captureArmedTime) < kLeftClickGraceSec) {
+                continue;  // too soon after arming — likely the double-click tail
             }
+            applyBinding(mb.code);
+            return;
         }
 
         // Scan the useful VK range for a fresh key press and translate to DIK.
@@ -701,6 +786,7 @@ namespace MCMWidgetRenderer {
         for (int vk = 0x08; vk <= 0xFE; ++vk) {
             if (vk == VK_ESCAPE || vk == VK_TAB) continue;
             if (!(GetAsyncKeyState(vk) & 0x8000)) continue;
+            if (isIgnored(vk)) continue;  // held since before capture — not a fresh press
 
             UINT scan = MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
             if (scan == 0) continue;
@@ -888,9 +974,12 @@ namespace MCMWidgetRenderer {
                 }
             }
 
-            // Gamepad X — reset the focused slider to its config default
-            if (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceLeft, false) &&
-                !ctrl.valueSource.defaultValue.empty()) {
+            // Gamepad X — reset the focused slider to its config default.
+            // The X edge is consumed last (side effect) and only when this is
+            // the focused control that can actually reset, so a single press
+            // isn't swallowed by an unrelated control.
+            if (ImGui::IsItemFocused() && !ctrl.valueSource.defaultValue.empty() &&
+                GamepadInput::ConsumeResetUnbindEdge()) {
                 try {
                     if (isFloatSource) {
                         state.floatVal = std::stof(ctrl.valueSource.defaultValue);
@@ -1228,15 +1317,22 @@ namespace MCMWidgetRenderer {
                     s_captureHotkeyId = hotkeyId;
                     s_captureStateKey = ctrl.id;
                     s_captureModName = ctx.modName;
+                    // Snapshot held keys on the next capture frame so the key
+                    // that activated this button (Space/Enter via nav) can't be
+                    // bound before it's released. See ProcessHotkeyCapture.
+                    s_captureArmSnapshotPending = true;
+                    s_captureHeldAtStart.clear();
                 }
             }
             ImGui::SameLine();
             ImGui::TextUnformatted(ctrl.text.c_str());
             ImGui::PopID();
 
-            // Gamepad X — unbind the focused hotkey control directly
-            if (!capturingThis && ImGui::IsItemFocused() &&
-                ImGui::IsKeyPressed(ImGuiKey_GamepadFaceLeft, false) && binding != 0) {
+            // Gamepad X — unbind the focused hotkey control directly. Edge
+            // consumed last so it's only spent when this focused, bound control
+            // actually acts on it.
+            if (!capturingThis && ImGui::IsItemFocused() && binding != 0 &&
+                GamepadInput::ConsumeResetUnbindEdge()) {
                 HotkeyManager::SetBinding(hotkeyId.c_str(), 0);
                 state.intVal = 0;
                 MCMPapyrusAPI::DispatchSettingChanged(ctx.modName, ctrl.id);
@@ -1602,6 +1698,9 @@ namespace MCMWidgetRenderer {
 
     void CancelHotkeyCapture() {
         s_captureActive = false;
+        s_captureArmSnapshotPending = false;
+        s_captureHeldAtStart.clear();
+        for (bool& held : s_captureMouseHeldAtStart) held = false;
     }
 
     bool IsMCMPageFunction(void(__stdcall* fn)()) {

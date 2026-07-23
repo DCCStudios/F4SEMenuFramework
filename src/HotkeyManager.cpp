@@ -2,6 +2,7 @@
 #include "Application.h"
 #include "HudManager.h"
 #include "GamepadInput.h"
+#include "WindowManager.h"
 #include "MCM/MCMKeybindStore.h"
 #include "imgui.h"
 
@@ -40,20 +41,46 @@ namespace HotkeyConflictDialog {
         Close();
     }
 
+    // ImGui popup identifier. Using a real modal popup (rather than a plain
+    // Begin window with NoNav, which is what this used to be) buys three things
+    // the old dialog lacked: gamepad/keyboard navigation reaches the buttons,
+    // the popup captures input and dims the menu behind it, and the gamepad
+    // "back" button (B / Circle) closes it for free via ImGui's NavCancel —
+    // which the global back-cascade in Hooks.cpp already accounts for through
+    // its pre-NewFrame OpenPopupStack snapshot, so B won't also close the menu.
+    static constexpr const char* kPopupId = "Hotkey Conflict##HotkeyConflictConfirm";
+
     static void __stdcall Render() {
         if (!active) return;
+
+        // Tie the dialog's lifetime to the menu. It is only ever spawned by a
+        // rebind performed inside the framework menu, so if that menu is gone
+        // (user pressed ESC / Start / the toggle key), the dialog must go too
+        // instead of stranding a modal on the HUD during gameplay. Returning
+        // before submitting the popup also lets ImGui auto-close it.
+        if (!WindowManager::IsAnyWindowOpen()) {
+            logger::info("[HotkeyManager] Menu closed with conflict dialog open — dismissing '{}'", pendingId);
+            Close();
+            return;
+        }
+
+        // Open on the first frame after Show(). Guarded so we don't re-open a
+        // popup the user is actively dismissing.
+        if (!ImGui::IsPopupOpen(kPopupId)) {
+            ImGui::OpenPopup(kPopupId);
+        }
 
         auto* viewport = ImGui::GetMainViewport();
         ImVec2 center(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
                       viewport->WorkPos.y + viewport->WorkSize.y * 0.5f);
-
         ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f));  // auto-height
-        ImGui::SetNextWindowBgAlpha(0.95f);
 
+        // NoNav is deliberately NOT set here (it was the bug): the modal needs
+        // nav so a controller/keyboard can reach Cancel/Confirm.
         ImGuiWindowFlags flags =
-            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav |
-            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
             ImGuiWindowFlags_AlwaysAutoResize;
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
@@ -61,7 +88,8 @@ namespace HotkeyConflictDialog {
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.12f, 0.08f, 0.02f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.8f, 0.5f, 0.1f, 0.7f));
 
-        if (ImGui::Begin("##HotkeyConflictConfirm", nullptr, flags)) {
+        const bool visible = ImGui::BeginPopupModal(kPopupId, nullptr, flags);
+        if (visible) {
             // Title
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.2f, 1.0f));
             ImGui::TextUnformatted("Hotkey Conflict");
@@ -83,7 +111,7 @@ namespace HotkeyConflictDialog {
             ImGui::Separator();
             ImGui::Spacing();
 
-            // Buttons — right-aligned
+            // Buttons — centered
             float buttonWidth = 100.0f;
             float spacing = ImGui::GetStyle().ItemSpacing.x;
             float totalWidth = buttonWidth * 2 + spacing;
@@ -91,25 +119,50 @@ namespace HotkeyConflictDialog {
 
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.1f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.3f, 0.1f, 1.0f));
-            if (ImGui::Button("Cancel", ImVec2(buttonWidth, 0))) {
-                logger::info("[HotkeyManager] User cancelled rebinding '{}' to {}", pendingId, keyName);
-                Close();
-            }
+            const bool cancelClicked = ImGui::Button("Cancel", ImVec2(buttonWidth, 0));
+            // Give the controller/keyboard an initial selection on Cancel (the
+            // safe default) the first time the modal is navigated.
+            ImGui::SetItemDefaultFocus();
             ImGui::PopStyleColor(2);
 
             ImGui::SameLine();
 
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.2f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.7f, 0.3f, 1.0f));
-            if (ImGui::Button("Confirm", ImVec2(buttonWidth, 0))) {
-                ApplyBinding();
-            }
+            const bool confirmClicked = ImGui::Button("Confirm", ImVec2(buttonWidth, 0));
             ImGui::PopStyleColor(2);
+
+            if (cancelClicked) {
+                logger::info("[HotkeyManager] User cancelled rebinding '{}' to {}", pendingId, keyName);
+                ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+                Close();
+                ImGui::PopStyleColor(2);
+                ImGui::PopStyleVar(2);
+                return;
+            }
+            if (confirmClicked) {
+                ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+                ApplyBinding();  // sets the binding, then Close()
+                ImGui::PopStyleColor(2);
+                ImGui::PopStyleVar(2);
+                return;
+            }
+
+            ImGui::EndPopup();
         }
-        ImGui::End();
 
         ImGui::PopStyleColor(2);
         ImGui::PopStyleVar(2);
+
+        // BeginPopupModal returned false while we still consider the dialog
+        // active => it was dismissed by ImGui's NavCancel (gamepad B / Esc).
+        // Treat that as Cancel so state and the HUD registration are cleaned up.
+        if (!visible && active) {
+            logger::info("[HotkeyManager] Conflict dialog dismissed (back/Esc) for '{}'", pendingId);
+            Close();
+        }
     }
 
     static void Show(const std::string& id, unsigned int scanCode, const std::vector<std::string>& conflicts, const std::string& keyNameStr) {
