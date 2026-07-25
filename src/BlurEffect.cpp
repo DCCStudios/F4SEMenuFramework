@@ -87,6 +87,57 @@ namespace BlurEffect {
         return blob;
     }
 
+    // ------------------------------------------------------------------
+    // Proxy-aware back buffer access.
+    //
+    // Real DXGI swap chains AddRef the texture they return from GetBuffer,
+    // so callers must Release it. Swap-chain proxy mods (Frame Generation /
+    // Upscaling, Nexus 98208 / 99130) hand the game a hand-rolled proxy
+    // whose GetBuffer returns an internal texture WITHOUT AddRef — a
+    // symmetric Release from us would walk their texture's refcount down to
+    // destruction over a few frames. Probe the semantics once by comparing
+    // the refcount across two consecutive GetBuffer calls, then only
+    // Release when the swap chain actually AddRefs.
+    // ------------------------------------------------------------------
+    static bool g_getBufferAddRefs = true;  // standard DXGI behavior by default
+    static bool g_getBufferProbed = false;
+
+    static ID3D11Texture2D* AcquireBackBuffer(IDXGISwapChain* swapChain) {
+        ID3D11Texture2D* tex = nullptr;
+        swapChain->GetBuffer(0, IID_PPV_ARGS(&tex));
+        if (!tex) return nullptr;
+
+        if (!g_getBufferProbed) {
+            g_getBufferProbed = true;
+            // Refcount after the first fetch (AddRef+Release reads the count
+            // without a net change).
+            tex->AddRef();
+            const ULONG c1 = tex->Release();
+            // Second fetch of the same buffer: a real swap chain AddRefs
+            // again (count rises), a proxy returns the pointer unchanged.
+            ID3D11Texture2D* tex2 = nullptr;
+            swapChain->GetBuffer(0, IID_PPV_ARGS(&tex2));
+            if (tex2) {
+                tex2->AddRef();
+                const ULONG c2 = tex2->Release();
+                g_getBufferAddRefs = c2 > c1;
+                if (g_getBufferAddRefs) {
+                    tex2->Release();  // undo the second fetch's reference
+                }
+            }
+            logger::info("[BlurEffect] Swap chain GetBuffer {} — using {} release handling",
+                g_getBufferAddRefs ? "AddRefs (real DXGI)" : "does not AddRef (proxy)",
+                g_getBufferAddRefs ? "balanced" : "no-op");
+        }
+        return tex;
+    }
+
+    static void ReleaseBackBuffer(ID3D11Texture2D* tex) {
+        if (tex && g_getBufferAddRefs) {
+            tex->Release();
+        }
+    }
+
     static bool CreateBlurTargets() {
         for (int i = 0; i < 2; i++) {
             g_blurTex[i].Reset();
@@ -120,11 +171,15 @@ namespace BlurEffect {
 
         g_device = device;
 
-        // Get back buffer dimensions
-        ComPtr<ID3D11Texture2D> backBuffer;
-        swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()));
+        // Get back buffer dimensions (proxy-aware acquire; see helper above)
+        ID3D11Texture2D* backBuffer = AcquireBackBuffer(swapChain);
+        if (!backBuffer) {
+            logger::error("[BlurEffect] Swap chain returned no back buffer — blur disabled");
+            return;
+        }
         D3D11_TEXTURE2D_DESC bbDesc{};
         backBuffer->GetDesc(&bbDesc);
+        ReleaseBackBuffer(backBuffer);
         g_backBufferWidth = bbDesc.Width;
         g_backBufferHeight = bbDesc.Height;
         g_blurWidth = bbDesc.Width / kDownscaleFactor;
@@ -234,10 +289,13 @@ namespace BlurEffect {
         UINT numVP = 1;
         ctx->RSGetViewports(&numVP, &oldVP);
 
-        // Copy back buffer to our readable texture
-        ComPtr<ID3D11Texture2D> backBuffer;
-        swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()));
-        ctx->CopyResource(g_backBufferCopy.Get(), backBuffer.Get());
+        // Copy back buffer to our readable texture (proxy-aware acquire)
+        ID3D11Texture2D* backBuffer = AcquireBackBuffer(swapChain);
+        if (!backBuffer) {
+            return;
+        }
+        ctx->CopyResource(g_backBufferCopy.Get(), backBuffer);
+        ReleaseBackBuffer(backBuffer);
 
         // Set common state
         ctx->VSSetShader(g_vsFullscreen.Get(), nullptr, 0);

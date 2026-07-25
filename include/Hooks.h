@@ -36,6 +36,17 @@ namespace Hooks {
     struct PresentHook {
         static HRESULT __stdcall thunk(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
         static inline HRESULT(__stdcall* originalPresent)(IDXGISwapChain*, UINT, UINT) = nullptr;
+
+        // Device/context/window captured in CreateDeviceHook::thunk (we hold
+        // one reference on each for the lifetime of the process). These are
+        // the authoritative D3D11 objects the game renders with. Frame
+        // Generation (Nexus 98208) and Upscaling (99130) replace the game's
+        // swap chain with a hand-rolled DX12 proxy object whose GetDevice can
+        // return null, so ImGui init must never depend on asking the swap
+        // chain for its device.
+        static inline ID3D11Device* capturedDevice = nullptr;
+        static inline ID3D11DeviceContext* capturedContext = nullptr;
+        static inline HWND capturedWindow = nullptr;
     };
 
     struct ClipCursorHook {

@@ -183,12 +183,31 @@ HRESULT __stdcall Hooks::CreateDeviceHook::thunk(
 
     logger::info("Game's D3D11 device created — hooking real SwapChain::Present");
 
+    // Capture the authoritative device/context/window here. When a swap-chain
+    // proxy mod (Frame Generation / Upscaling) is active, *ppSwapChain is its
+    // custom C++ object, not a real DXGI swap chain — but *ppDevice and
+    // *ppImmediateContext are always the real D3D11 objects the game renders
+    // with (the proxy path fills them via D3D11CreateDevice internally).
+    // Hold one reference on each so PresentHook can use them safely without
+    // ever querying the (possibly fake) swap chain.
+    if (ppDevice && *ppDevice) {
+        PresentHook::capturedDevice = *ppDevice;
+        PresentHook::capturedDevice->AddRef();
+    }
+    if (ppImmediateContext && *ppImmediateContext) {
+        PresentHook::capturedContext = *ppImmediateContext;
+        PresentHook::capturedContext->AddRef();
+    }
+    if (pSwapChainDesc) {
+        PresentHook::capturedWindow = pSwapChainDesc->OutputWindow;
+    }
+
     auto* vtbl = reinterpret_cast<std::uintptr_t*>(*reinterpret_cast<std::uintptr_t*>(*ppSwapChain));
     PresentHook::originalPresent = reinterpret_cast<decltype(PresentHook::originalPresent)>(vtbl[8]);
     REL::WriteSafeData(reinterpret_cast<std::uintptr_t>(&vtbl[8]),
         reinterpret_cast<std::uintptr_t>(&PresentHook::thunk));
 
-    logger::info("IDXGISwapChain::Present VTable hook installed on real swap chain");
+    logger::info("IDXGISwapChain::Present VTable hook installed on swap chain (index 8)");
 
     g_gameWindow = ::GetActiveWindow();
     ::GetWindowRect(g_gameWindow, &ClipCursorHook::savedWindowRect);
@@ -240,18 +259,42 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
         initDone = true;
         logger::debug("[PresentHook] First call — initializing ImGui");
 
-        ID3D11Device* device = nullptr;
-        swapChain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&device));
+        // Prefer the device/context captured in CreateDeviceHook. Swap-chain
+        // proxy mods (Frame Generation / Upscaling) hand the game a custom
+        // object whose GetDevice can return null — asking the swap chain was
+        // exactly what broke the overlay when both were installed on AE.
+        // `ownsRefs` tracks whether this block took extra references that must
+        // be released at the end (only the GetDevice fallback path does; the
+        // captured objects are process-lifetime references we keep).
+        bool ownsRefs = false;
+        ID3D11Device* device = capturedDevice;
+        ID3D11DeviceContext* context = capturedContext;
         if (!device) {
-            logger::error("Failed to get ID3D11Device from swapchain");
-            return originalPresent(swapChain, syncInterval, flags);
+            swapChain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&device));
+            if (!device) {
+                logger::error("Failed to get ID3D11Device from swapchain (no captured device either)");
+                return originalPresent(swapChain, syncInterval, flags);
+            }
+            device->GetImmediateContext(&context);
+            ownsRefs = true;
+            logger::info("[PresentHook] Using device from swapChain->GetDevice (capture was empty)");
+        } else {
+            logger::info("[PresentHook] Using device captured at creation time");
+            if (!context) {
+                device->GetImmediateContext(&context);  // AddRefs; keep as the process-lifetime ref
+                capturedContext = context;
+            }
         }
 
-        ID3D11DeviceContext* context = nullptr;
-        device->GetImmediateContext(&context);
-
+        // Window handle: GetDesc works on real swap chains and on the known
+        // proxies (they forward it), but fall back to the creation-time HWND
+        // if a proxy returns nothing.
         DXGI_SWAP_CHAIN_DESC desc{};
         swapChain->GetDesc(&desc);
+        if (!desc.OutputWindow) {
+            desc.OutputWindow = capturedWindow;
+            logger::info("[PresentHook] Swap chain GetDesc gave no window — using captured HWND");
+        }
         g_gameWindow = desc.OutputWindow;
 
         IMGUI_CHECKVERSION();
@@ -266,15 +309,13 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
 
         if (!ImGui_ImplWin32_Init(desc.OutputWindow)) {
             logger::error("ImGui initialization failed (Win32)");
-            device->Release();
-            context->Release();
+            if (ownsRefs) { device->Release(); context->Release(); }
             return originalPresent(swapChain, syncInterval, flags);
         }
 
         if (!ImGui_ImplDX11_Init(device, context)) {
             logger::error("ImGui initialization failed (DX11)");
-            device->Release();
-            context->Release();
+            if (ownsRefs) { device->Release(); context->Release(); }
             return originalPresent(swapChain, syncInterval, flags);
         }
 
@@ -304,8 +345,10 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
         // atlas would exceed D3D11's texture size limit (was a CTD).
         FontManager::BuildAtlasSafe(io);
 
-        device->Release();
-        context->Release();
+        if (ownsRefs) {
+            device->Release();
+            context->Release();
+        }
 
         logger::debug("[PresentHook] Initialization complete");
     }
@@ -318,17 +361,23 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
 
         // Apply GPU blur to the back buffer when background blur is active.
         // This runs before ImGui so the blurred scene is behind all UI.
+        // Uses the captured context (never swapChain->GetDevice — that fails
+        // on swap-chain proxy mods and silently disabled the blur).
         if (GameLock::blurAppliedByUs && BlurEffect::IsInitialized()) {
-            ID3D11Device* dev = nullptr;
-            swapChain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev));
-            if (dev) {
-                ID3D11DeviceContext* ctx = nullptr;
-                dev->GetImmediateContext(&ctx);
-                if (ctx) {
-                    BlurEffect::RenderBlurredBackground(ctx, swapChain);
-                    ctx->Release();
+            ID3D11DeviceContext* ctx = capturedContext;
+            bool ctxOwned = false;
+            if (!ctx) {
+                ID3D11Device* dev = nullptr;
+                swapChain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev));
+                if (dev) {
+                    dev->GetImmediateContext(&ctx);
+                    dev->Release();
+                    ctxOwned = true;
                 }
-                dev->Release();
+            }
+            if (ctx) {
+                BlurEffect::RenderBlurredBackground(ctx, swapChain);
+                if (ctxOwned) ctx->Release();
             }
         }
 
