@@ -140,13 +140,13 @@ Papyrus continues to use the usual API (`MCM.GetModSettingFloat`, `SetModSetting
 ```ini
 [MCMCompat]
 Enabled = true
-MCMCompatWhenNativePresent = false
+MCMCompatWhenNativePresent = true
 ```
 
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `Enabled` | `true` | Master switch for the translation layer (restart required when toggled in UI). |
-| `MCMCompatWhenNativePresent` | `false` | If `true` and `mcm.dll` is loaded, show translated pages alongside native MCM. |
+| `MCMCompatWhenNativePresent` | `true` | With `mcm.dll` loaded, show translated pages alongside native MCM. Set `false` to keep native MCM as the only settings UI. |
 
 These toggles are also in the framework’s in-game Settings window.
 

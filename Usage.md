@@ -296,20 +296,20 @@ Use the normal MCM script API (`GetModSettingInt`, `SetModSettingFloat`, `Regist
 ```ini
 [MCMCompat]
 Enabled = true
-MCMCompatWhenNativePresent = false
+MCMCompatWhenNativePresent = true
 ```
 
 Changing these in the UI requires a **game restart** before pages are (re)scanned.
 
 ### Coexistence with native MCM
 
-When both are installed and `MCMCompatWhenNativePresent = true`:
+When both are installed and `MCMCompatWhenNativePresent = true` (the default):
 
 - Duplicate menus are possible (classic MCM + **MCM Mod Configs (Legacy)**).
 - Settings files are shared; the framework reloads INIs when its overlay opens.
 - Hotkey rebinds can sync with the running MCM while the pause menu movie is loaded (opening via the pause-menu **F4SE Framework** button keeps that movie under the overlay).
 
-When coexistence is **off** (default with `mcm.dll` present), the framework does not register translated MCM pages, native MCM remains the single UI.
+When coexistence is turned **off** (`MCMCompatWhenNativePresent = false`), the framework does not register translated MCM pages, native MCM remains the single UI.
 
 ---
 

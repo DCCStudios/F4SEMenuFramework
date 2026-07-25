@@ -4,10 +4,11 @@
 //
 // Policy (user decision — no consent popup):
 //   - Real MCM absent  -> our MCM compatibility layer loads freely.
-//   - Real MCM present -> our translation layer is silently disabled by
-//     default so the real MCM stays authoritative. The user can force-enable
-//     both via the "MCMCompatWhenNativePresent" toggle in the framework
-//     settings window (persisted in F4SEMenuFramework.ini).
+//   - Real MCM present -> coexistence is ON by default: translated pages load
+//     alongside the real MCM (keybind action dispatch stays suppressed so
+//     nothing double-fires; the real MCM remains the Papyrus native provider).
+//     The user can disable this via the "MCMCompatWhenNativePresent" toggle in
+//     the framework settings window (persisted in F4SEMenuFramework.ini).
 namespace MCMConflictCheck {
 
     enum class ConflictState {

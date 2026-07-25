@@ -36,16 +36,17 @@ namespace MCMConflictCheck {
             return;
         }
 
-        // Real MCM is running. Default: silently step aside so the real MCM
-        // remains the single source of truth (no duplicate menus, no value
-        // desync, no double Papyrus callbacks). The user can force-enable
-        // coexistence from the framework settings window.
+        // Real MCM is running. Default: coexistence — translated pages load
+        // alongside the real MCM. Safe because keybind action dispatch is
+        // suppressed when mcm.dll is present (no double-fire) and the real MCM
+        // keeps the Papyrus natives. The user can turn this off in settings if
+        // they prefer the real MCM as the single UI.
         if (Config::MCMCompatWhenNativePresent) {
             s_state = ConflictState::ConflictAllow;
-            logger::warn("[MCMConflictCheck] Real MCM detected but user force-enabled MCM compatibility — both systems will run (duplicate menus/callbacks possible)");
+            logger::info("[MCMConflictCheck] Real MCM detected — coexistence enabled (default): translated pages load alongside it, keybind dispatch suppressed");
         } else {
             s_state = ConflictState::ConflictSkip;
-            logger::info("[MCMConflictCheck] Real MCM detected — MCM compatibility layer auto-disabled (enable 'Load MCM menus alongside real MCM' in settings to override)");
+            logger::info("[MCMConflictCheck] Real MCM detected — MCM compatibility layer disabled by user setting (MCMCompatWhenNativePresent = false)");
         }
     }
 

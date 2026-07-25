@@ -29,35 +29,49 @@ namespace MCMKeybindTranslator {
     static std::chrono::steady_clock::time_point s_pressTimeTable[MAX_KEYBINDS];  // for OnControlUp held duration
     static size_t s_nextSlot = 0;
 
-    // Template thunk generator — dispatches the action for a given slot.
-    // Structured (object-form) actions take priority since they preserve the
-    // target form and typed params; legacy string actions are the fallback.
-    // SendEvent actions deliver OnControlDown here and OnControlUp from the
-    // matching release thunk, mirroring the real MCM's input handler.
+    // Template thunk generator. HotkeyManager invokes these from the window-
+    // message thread (WndProc). Papyrus / Scaleform / console work is NOT safe
+    // there (Workshop Framework-style SendEvent OnControlDown opening a menu
+    // has CTD'd when called inline), so we stamp press time synchronously and
+    // marshal the actual action onto the F4SE main-thread task queue.
     template <size_t N>
     static void __stdcall KeybindThunk() {
         if constexpr (N < MAX_KEYBINDS) {
             if (s_suppressDispatch.load(std::memory_order_relaxed)) {
                 return;  // real MCM's input handler dispatches this bind
             }
+            const auto* tasks = F4SE::GetTaskInterface();
+            if (!tasks) return;
+
             if (s_actionObjTable[N].has_value()) {
                 if (s_actionObjTable[N]->type == "SendEvent") {
                     s_pressTimeTable[N] = std::chrono::steady_clock::now();
-                    MCMPapyrusDispatch::SendControlEvent(
-                        s_actionObjTable[N]->form, s_keybindIdTable[N], /*down=*/true, 0.0f);
+                    const std::string form = s_actionObjTable[N]->form;
+                    const std::string controlId = s_keybindIdTable[N];
+                    tasks->AddTask([form, controlId]() {
+                        MCMPapyrusDispatch::SendControlEvent(form, controlId, /*down=*/true, 0.0f);
+                    });
                 } else {
-                    MCMPapyrusDispatch::ExecuteStructuredAction(
-                        *s_actionObjTable[N], s_modNameTable[N], "",
-                        MCMPapyrusDispatch::ControlValue{});  // no control value for keybinds
+                    const auto action = *s_actionObjTable[N];
+                    const std::string modName = s_modNameTable[N];
+                    tasks->AddTask([action, modName]() {
+                        MCMPapyrusDispatch::ExecuteStructuredAction(
+                            action, modName, "", MCMPapyrusDispatch::ControlValue{});
+                    });
                 }
             } else if (!s_actionTable[N].empty()) {
-                MCMPapyrusDispatch::ExecuteAction(s_actionTable[N], s_modNameTable[N]);
+                const std::string action = s_actionTable[N];
+                const std::string modName = s_modNameTable[N];
+                tasks->AddTask([action, modName]() {
+                    MCMPapyrusDispatch::ExecuteAction(action, modName);
+                });
             }
         }
     }
 
-    // Release thunk — only wired up for SendEvent keybinds. OnControlUp's
-    // second argument is the held duration in seconds (matches real MCM).
+    // Release thunk: only wired up for SendEvent keybinds. Held duration is
+    // measured here (WndProc thread) so queue latency does not inflate it;
+    // OnControlUp itself still runs on the game thread.
     template <size_t N>
     static void __stdcall KeybindUpThunk() {
         if constexpr (N < MAX_KEYBINDS) {
@@ -67,8 +81,13 @@ namespace MCMKeybindTranslator {
             if (s_actionObjTable[N].has_value() && s_actionObjTable[N]->type == "SendEvent") {
                 const float held = std::chrono::duration<float>(
                     std::chrono::steady_clock::now() - s_pressTimeTable[N]).count();
-                MCMPapyrusDispatch::SendControlEvent(
-                    s_actionObjTable[N]->form, s_keybindIdTable[N], /*down=*/false, held);
+                const auto* tasks = F4SE::GetTaskInterface();
+                if (!tasks) return;
+                const std::string form = s_actionObjTable[N]->form;
+                const std::string controlId = s_keybindIdTable[N];
+                tasks->AddTask([form, controlId, held]() {
+                    MCMPapyrusDispatch::SendControlEvent(form, controlId, /*down=*/false, held);
+                });
             }
         }
     }

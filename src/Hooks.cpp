@@ -436,8 +436,23 @@ LRESULT Hooks::WndProcHook::thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     static std::chrono::steady_clock::time_point holdStartTime;
     static bool holdKeyDown = false;
 
+    // Convert a WM_*KEY* lParam to the DirectInput scan code HotkeyManager and
+    // MCM capture use. Windows puts the base scan in bits 16-23 and KF_EXTENDED
+    // in bit 24; DIK puts navigation keys / numpad-enter / right-ctrl/alt at
+    // base|0x80 (PageUp=0xC9, etc.). Without this bit, a PageUp bind saved as
+    // 0xC9 never matches the 0x49 WndProc would otherwise dispatch.
+    auto wmLParamToDIK = [](LPARAM lp) -> UINT {
+        UINT scan = (lp >> 16) & 0xFF;
+        if (lp & 0x01000000) {  // KF_EXTENDED
+            if (scan < 0x80) {
+                scan |= 0x80;
+            }
+        }
+        return scan;
+    };
+
     if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) {
-        UINT scanCode = (lParam >> 16) & 0xFF;
+        UINT scanCode = wmLParamToDIK(lParam);
         bool isFirstPress = (lParam & 0x40000000) == 0;
 
         if (scanCode == Config::ToggleKey && Config::ToggleMode != 3) {
@@ -488,11 +503,11 @@ LRESULT Hooks::WndProcHook::thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     }
 
     if (uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP) {
-        UINT scanCode = (lParam >> 16) & 0xFF;
+        UINT scanCode = wmLParamToDIK(lParam);
         if (scanCode == Config::ToggleKey) {
             holdKeyDown = false;
         }
-        // Key-up counterpart of the hotkey dispatch above — needed by MCM
+        // Key-up counterpart of the hotkey dispatch above: needed by MCM
         // SendEvent keybinds (OnControlUp carries the held duration). Always
         // delivered so a press started in gameplay can't leave a hotkey stuck
         // "down" if a menu opened before release; DispatchUp itself only fires

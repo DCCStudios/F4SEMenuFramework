@@ -23,6 +23,14 @@ namespace MCMKeybindStore {
     // file doesn't exist (store starts empty and is created on first write).
     void Load();
 
+    // Checks whether Keybinds.json changed on disk since we last read or wrote
+    // it (the running native MCM persists rebinds to that file mid-session).
+    // If it did, re-reads the file and imports every changed binding into
+    // HotkeyManager so translated pages show fresh values even when the
+    // pause-menu Scaleform pull hasn't run. Returns true when a reload
+    // happened. Call on overlay open (cheap: one stat when unchanged).
+    bool ReloadIfChangedOnDisk();
+
     // Returns the user's saved binding for an MCM keybind as a DIK scan code,
     // or nullopt if the file has no entry for it. A stored keycode that can't
     // be translated also yields nullopt.

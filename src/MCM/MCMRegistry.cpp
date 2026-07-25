@@ -68,6 +68,11 @@ namespace MCMRegistry {
             return;
         }
         MCMValueProvider::ReloadAll();
+        // Pick up keybind changes the native MCM persisted to Keybinds.json
+        // since we last touched it (covers rebinds made in MCM after the pause
+        // menu closed, where the Scaleform pull below can't run yet). Must
+        // happen before InvalidateAllStates so controls re-read fresh values.
+        MCMKeybindStore::ReloadIfChangedOnDisk();
         MCMWidgetRenderer::InvalidateAllStates();
         MCMLiveSync::RequestPull();
     }
@@ -79,9 +84,9 @@ namespace MCMRegistry {
             return;
         }
 
-        // Step 1: Check for the real MCM. When present, the translation layer
-        // silently steps aside (no consent popup) unless the user force-enabled
-        // coexistence in the framework settings.
+        // Step 1: Check for the real MCM. When present, coexistence is the
+        // default (translated pages load alongside it); the user can disable
+        // that in the framework settings, which makes us step aside here.
         MCMConflictCheck::Check();
         if (!MCMConflictCheck::ShouldLoadMCMMenus()) {
             // Reason already logged by MCMConflictCheck

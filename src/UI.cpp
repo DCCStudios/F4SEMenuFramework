@@ -865,16 +865,18 @@ void UI::RenderConfigWindow() {
             ImGui::EndPopup();
         }
 
-        // Only meaningful when the real MCM plugin is loaded alongside us —
-        // by default our translation layer silently steps aside in that case.
+        // Only meaningful when the real MCM plugin is loaded alongside us.
+        // Coexistence is ON by default: translated pages load next to the real
+        // MCM (keybind dispatch stays suppressed so nothing runs twice).
         if (MCMConflictCheck::IsNativeMCMPresent()) {
             if (ToggleButton("Load MCM Mod Configs (Legacy) Even With MCM Installed", &Config::MCMCompatWhenNativePresent)) {
                 Config::Save();
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("The original MCM plugin is installed. By default this framework\n"
-                                  "hides its own MCM Mod Configs (Legacy) pages to avoid conflicts. Enable to\n"
-                                  "show them anyway (both write the same setting files).\n"
+                                  "also shows its own MCM Mod Configs (Legacy) pages alongside it\n"
+                                  "(both write the same setting files; hotkey actions only fire once).\n"
+                                  "Disable to let the original MCM be the only settings UI.\n"
                                   "Requires game restart to take effect.");
             }
         }

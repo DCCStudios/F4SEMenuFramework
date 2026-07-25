@@ -20,7 +20,7 @@ float Config::FontSizeSmall = 16.0f;
 float Config::FontSizeMedium = 32.0f;
 float Config::FontSizeBig = 64.0f;
 bool Config::MCMCompatEnabled = true;
-bool Config::MCMCompatWhenNativePresent = false;
+bool Config::MCMCompatWhenNativePresent = true;
 int Config::GamepadGlyphStyle = 0;
 
 
@@ -64,7 +64,7 @@ void Config::Init() {
 
     ini->SetSection("MCMCompat");
     MCMCompatEnabled = ini->GetBool("Enabled", true);
-    MCMCompatWhenNativePresent = ini->GetBool("MCMCompatWhenNativePresent", false);
+    MCMCompatWhenNativePresent = ini->GetBool("MCMCompatWhenNativePresent", true);
 
     // Gamepad glyph platform: "xbox" (default) or "playstation"
     ini->SetSection("Gamepad");

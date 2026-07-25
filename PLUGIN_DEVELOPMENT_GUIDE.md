@@ -886,7 +886,7 @@ Data/MCM/Settings/MyMod.ini             ; user values (runtime; written by MCM o
 
 1. **Scan / build pages** runs during `kGameDataReady` via `MCMRegistry::Init()` when `Config::MCMCompatEnabled` is true.
 2. **Native MCM detection** is `GetModuleHandleA("mcm.dll")`, not plugin name matching.
-3. If `mcm.dll` is present and `MCMCompatWhenNativePresent` is false (default), translated pages are **not** registered (native MCM stays sole UI).
+3. If `mcm.dll` is present, coexistence is the default (`MCMCompatWhenNativePresent = true`): translated pages register alongside native MCM with keybind dispatch suppressed. Setting it to false keeps native MCM as the sole UI.
 4. If `mcm.dll` is **absent**, the framework registers `MCM.*` Papyrus natives (`GetModSetting*`, `SetModSetting*`, `RefreshMenu`, …) and `GetVersionCode()` returns **9**.
 5. If `mcm.dll` is present, Papyrus native registration is **skipped** so the real MCM owns those bindings.
 6. Coexistence (both UIs) shares the same settings INIs; the overlay reloads from disk on open. Hotkeys can live-sync through MCM’s pause-menu Scaleform object when that movie is loaded.
@@ -908,7 +908,7 @@ Beyond the standard MCM control set, the translated pages support:
 ```ini
 [MCMCompat]
 Enabled = true
-MCMCompatWhenNativePresent = false
+MCMCompatWhenNativePresent = true
 ```
 
 Toggles in the framework Settings window require a **game restart** to rescan.

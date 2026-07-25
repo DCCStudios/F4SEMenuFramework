@@ -1,6 +1,7 @@
 #include "MCM/MCMKeybindStore.h"
 #include "MCM/MCMLiveSync.h"
 #include "MCM/MCMScanner.h"
+#include "HotkeyManager.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -8,6 +9,7 @@
 #include <windows.h>
 
 #include <fstream>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <vector>
@@ -27,6 +29,15 @@ namespace MCMKeybindStore {
 
     static std::vector<StoredKeybind> s_entries;
     static bool s_loaded = false;
+    // Set when Load() finds an existing Keybinds.json it cannot parse. We must
+    // refuse SaveLocked() in that state: otherwise the next rebind would
+    // truncate-write an empty/partial file over the user's (possibly recoverable)
+    // bindings. Cleared only by a successful Load() of a well-formed file.
+    static bool s_refuseSaveCorrupt = false;
+    // Last write time of Keybinds.json as of our last read or write. Lets
+    // ReloadIfChangedOnDisk detect external writes (the running native MCM
+    // persists rebinds to this file) without re-parsing every call.
+    static std::filesystem::file_time_type s_lastSeenWriteTime{};
     static std::mutex s_mutex;
 
     // hotkeyId ("MCM.<mod>.<id>") -> (modName, keybindId) routing table
@@ -83,7 +94,16 @@ namespace MCMKeybindStore {
     // ------------------------------------------------------------------
 
     // Caller must hold s_mutex.
+    // Writes via a sibling .tmp file then MoveFileEx REPLACE so a crash mid-write
+    // cannot leave Keybinds.json truncated/empty (which would wipe every MCM
+    // hotkey on the next boot).
     static void SaveLocked() {
+        if (s_refuseSaveCorrupt) {
+            logger::error("[MCMKeybindStore] Refusing to overwrite Keybinds.json: "
+                "previous load failed to parse it. Fix or restore the file, then restart.");
+            return;
+        }
+
         nlohmann::json root;
         root["version"] = 1;
         nlohmann::json arr = nlohmann::json::array();
@@ -101,21 +121,55 @@ namespace MCMKeybindStore {
         std::error_code ec;
         std::filesystem::create_directories(path.parent_path(), ec);
 
-        std::ofstream file(path, std::ios::trunc);
-        if (!file.is_open()) {
-            logger::error("[MCMKeybindStore] Cannot write '{}'", path.string());
+        const std::filesystem::path tmpPath = path.wstring() + L".tmp";
+        {
+            std::ofstream file(tmpPath, std::ios::trunc | std::ios::binary);
+            if (!file.is_open()) {
+                logger::error("[MCMKeybindStore] Cannot write temporary '{}'", tmpPath.string());
+                return;
+            }
+            const std::string payload = root.dump();
+            file.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+            file.flush();
+            if (!file) {
+                logger::error("[MCMKeybindStore] Failed writing temporary Keybinds.json");
+                return;
+            }
+        }
+
+        // Atomic replace of the live file. MOVEFILE_WRITE_THROUGH asks the FS
+        // to flush before reporting success so a power loss mid-rename is less
+        // likely to leave neither file intact.
+        if (!::MoveFileExW(tmpPath.c_str(), path.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            const DWORD err = ::GetLastError();
+            logger::error("[MCMKeybindStore] MoveFileEx to '{}' failed (Win32 {})",
+                path.string(), err);
+            std::error_code rmEc;
+            std::filesystem::remove(tmpPath, rmEc);
             return;
         }
-        file << root.dump();
+
+        // Record the resulting mtime so ReloadIfChangedOnDisk doesn't mistake
+        // our own write for an external (native MCM) one.
+        std::error_code tsEc;
+        s_lastSeenWriteTime = std::filesystem::last_write_time(path, tsEc);
+
         logger::info("[MCMKeybindStore] Saved {} keybind(s) to '{}'", s_entries.size(), path.string());
     }
 
-    void Load() {
-        std::lock_guard lock(s_mutex);
+    // Caller must hold s_mutex. Re-reads Keybinds.json into s_entries and
+    // records its mtime; sets the corrupt-save guard on parse failure.
+    static void LoadLocked() {
         s_entries.clear();
         s_loaded = true;
+        s_refuseSaveCorrupt = false;
 
         auto path = StorePath();
+
+        std::error_code tsEc;
+        s_lastSeenWriteTime = std::filesystem::last_write_time(path, tsEc);
+
         std::ifstream file(path);
         if (!file.is_open()) {
             logger::info("[MCMKeybindStore] No user Keybinds.json yet ('{}')", path.string());
@@ -126,12 +180,17 @@ namespace MCMKeybindStore {
         try {
             file >> root;
         } catch (const nlohmann::json::parse_error& e) {
-            logger::error("[MCMKeybindStore] Parse error in '{}': {}", path.string(), e.what());
+            // Keep the on-disk file untouched and block later saves so we don't
+            // "recover" by writing an empty keybinds array over it.
+            s_refuseSaveCorrupt = true;
+            logger::error("[MCMKeybindStore] Parse error in '{}' (saves blocked until fixed): {}",
+                path.string(), e.what());
             return;
         }
 
         if (!root.is_object() || !root.contains("keybinds") || !root["keybinds"].is_array()) {
-            logger::warn("[MCMKeybindStore] Unrecognized Keybinds.json format");
+            s_refuseSaveCorrupt = true;
+            logger::warn("[MCMKeybindStore] Unrecognized Keybinds.json format (saves blocked until fixed)");
             return;
         }
 
@@ -147,6 +206,66 @@ namespace MCMKeybindStore {
         }
 
         logger::info("[MCMKeybindStore] Loaded {} user keybind(s) from '{}'", s_entries.size(), path.string());
+    }
+
+    void Load() {
+        std::lock_guard lock(s_mutex);
+        LoadLocked();
+    }
+
+    bool ReloadIfChangedOnDisk() {
+        // Collect the imports under the lock, apply them after releasing it
+        // (HotkeyManager has no lock of its own and never calls back here on
+        // ImportBinding, but keeping the critical section minimal is cheap).
+        struct PendingImport { std::string hotkeyId; unsigned int dik; };
+        std::vector<PendingImport> imports;
+
+        {
+            std::lock_guard lock(s_mutex);
+            if (!s_loaded) return false;
+
+            std::error_code tsEc;
+            const auto onDisk = std::filesystem::last_write_time(StorePath(), tsEc);
+            if (tsEc || onDisk == s_lastSeenWriteTime) {
+                return false;  // missing file or no external change
+            }
+
+            logger::info("[MCMKeybindStore] Keybinds.json changed on disk (native MCM wrote it) — reloading");
+            LoadLocked();
+
+            // Diff the fresh file against what HotkeyManager currently holds
+            // for every MCM-managed hotkey. Absent entry = unbound (VK 0);
+            // untranslatable codes (gamepad range etc.) are skipped, matching
+            // the Scaleform pull's semantics in MCMLiveSync.
+            for (const auto& [hotkeyId, ids] : s_mappings) {
+                const auto& [modName, keybindId] = ids;
+
+                unsigned int vk = 0;
+                for (const auto& e : s_entries) {
+                    if (e.modName == modName && e.id == keybindId) {
+                        vk = static_cast<unsigned int>(e.keycode);
+                        break;
+                    }
+                }
+
+                const unsigned int dik = vk != 0 ? VKToDIK(vk) : 0;
+                if (vk != 0 && dik == 0) continue;  // untranslatable
+
+                if (HotkeyManager::GetBinding(hotkeyId.c_str()) != dik) {
+                    imports.push_back(PendingImport{ hotkeyId, dik });
+                }
+            }
+        }
+
+        for (const auto& imp : imports) {
+            // ImportBinding (unlike SetBinding) does not notify this store, so
+            // there is no write-back echo.
+            HotkeyManager::ImportBinding(imp.hotkeyId.c_str(), imp.dik);
+        }
+        if (!imports.empty()) {
+            logger::info("[MCMKeybindStore] Imported {} keybind change(s) from disk", imports.size());
+        }
+        return true;
     }
 
     std::optional<unsigned int> GetSavedDIK(const std::string& modName, const std::string& keybindId) {
