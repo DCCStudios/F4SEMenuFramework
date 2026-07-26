@@ -302,6 +302,12 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
         auto& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+        // Keep NoMouseCursorChange so ImGui never fights the game's OS
+        // cursor while the overlay is closed. When the menu is open we draw
+        // a software cursor (MouseDrawCursor) and must hide the OS cursor
+        // ourselves (see Present + WM_SETCURSOR below): leaving that to the
+        // Win32 backend is a no-op under this flag, so the game's wait /
+        // hourglass cursor would stay visible underneath the ImGui arrow.
         io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
         io.IniFilename = nullptr;
         io.MouseDrawCursor = true;
@@ -422,6 +428,11 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
             } else {
                 GameLock::SetState(GameLock::State::Locked);
                 io.MouseDrawCursor = true;
+                // Hide the OS cursor while ImGui draws its own. Required
+                // because NoMouseCursorChange disables the Win32 backend's
+                // SetCursor(nullptr) path; without this the game's wait /
+                // hourglass cursor remains visible under the software arrow.
+                ::SetCursor(nullptr);
 
                 // B button (GamepadFaceRight) walks the back cascade first
                 // (cancel capture -> close popup / stop editing -> settings
@@ -597,6 +608,14 @@ LRESULT Hooks::WndProcHook::thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
     // --- Forward to ImGui and block game input when menu is active ---
     if (WindowManager::ShouldTheGameBePaused()) {
+        // WM_SETCURSOR: Windows asks us to restore a cursor on every mouse
+        // move over the client area. ImGui's handler won't hide the OS
+        // cursor while NoMouseCursorChange is set, so do it here and claim
+        // the message (TRUE) so DefWindowProc can't put the wait cursor back.
+        if (uMsg == WM_SETCURSOR && LOWORD(lParam) == HTCLIENT) {
+            ::SetCursor(nullptr);
+            return TRUE;
+        }
         ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam);
         return true;
     }

@@ -2,6 +2,10 @@
 
 All notable changes to F4SE Menu Framework are documented in this file.
 
+## [3.3.1] (2026-07-26)
+
+- **Fixed the Windows hourglass / wait cursor showing while the menu is open.** The overlay draws ImGui's software cursor and sets `ImGuiConfigFlags_NoMouseCursorChange` so it never fights the game's OS cursor when closed. That flag also disabled the Win32 backend's `SetCursor(nullptr)` path, so the game's wait cursor stayed visible underneath the ImGui arrow. The OS cursor is now hidden explicitly each frame and on `WM_SETCURSOR` while the blocking menu is open.
+
 ## [3.3.0] (2026-07-19)
 
 Compatibility release: **one DLL now supports every mainstream Fallout 4 runtime**: Old-gen **1.10.163**, Next-Gen **1.10.980 / 1.10.984**, and the current **1.11.x** patch line (verified against address libraries up to 1.11.221). Requires the Address Library `version-*.bin` matching your game version, as before.

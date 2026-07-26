@@ -14,7 +14,7 @@
 namespace Plugin
 {
     static constexpr auto NAME = "F4SEMenuFramework"sv;
-    static constexpr auto VERSION = REL::Version{ 3, 3, 0 };
+    static constexpr auto VERSION = REL::Version{ 3, 3, 1 };
 }
 
 // Version data consumed by the NG/AE F4SE loaders (0.7.x reads the exported
@@ -24,7 +24,7 @@ namespace Plugin
 // OG F4SE (0.6.23) ignores this export and uses F4SEPlugin_Query below.
 F4SE_PLUGIN_VERSION = []() noexcept {
     F4SE::PluginVersionData v{};
-    v.PluginVersion({ 3, 3, 0, 0 });
+    v.PluginVersion({ 3, 3, 1, 0 });
     v.PluginName("F4SEMenuFramework");
     v.AuthorName("SkyrimThiago");
     v.UsesAddressLibraryNG(true);  // 1.10.980 / 1.10.984
