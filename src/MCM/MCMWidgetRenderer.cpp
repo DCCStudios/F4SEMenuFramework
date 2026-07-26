@@ -102,7 +102,7 @@ namespace MCMWidgetRenderer {
     // --- Page thunk infrastructure (namespace scope) ---
     // Each MCM page gets assigned a slot. When the framework calls the thunk,
     // it looks up the context and renders the appropriate page.
-    static constexpr size_t MAX_MCM_PAGES = 512;
+    static constexpr size_t MAX_MCM_PAGES = 1024;
 
     struct PageSlotInfo {
         std::string modName;
