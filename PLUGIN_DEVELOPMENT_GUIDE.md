@@ -17,13 +17,14 @@ This guide covers everything you need to build an F4SE plugin that adds in-game 
 9. [Input Events](#9-input-events)
 10. [Plugin Hotkey API](#10-plugin-hotkey-api)
 11. [MCM Translation Layer](#11-mcm-translation-layer)
-12. [Loading Textures and Images](#12-loading-textures-and-images)
-13. [Font Awesome Icons](#13-font-awesome-icons)
-14. [Working with Game Forms (CommonLibF4)](#14-working-with-game-forms-commonlibf4)
-15. [Build and Deploy](#15-build-and-deploy)
-16. [Gotchas and F4SE-Specific Differences](#16-gotchas-and-f4se-specific-differences)
-17. [Complete Minimal Plugin](#17-complete-minimal-plugin)
-18. [Framework Internals: How the Hooks Work](#18-framework-internals-how-the-hooks-work)
+12. [Localizing Plugin Menus](#12-localizing-plugin-menus)
+13. [Loading Textures and Images](#13-loading-textures-and-images)
+14. [Font Awesome Icons](#14-font-awesome-icons)
+15. [Working with Game Forms (CommonLibF4)](#15-working-with-game-forms-commonlibf4)
+16. [Build and Deploy](#16-build-and-deploy)
+17. [Gotchas and F4SE-Specific Differences](#17-gotchas-and-f4se-specific-differences)
+18. [Complete Minimal Plugin](#18-complete-minimal-plugin)
+19. [Framework Internals: How the Hooks Work](#19-framework-internals-how-the-hooks-work)
 
 > Shorter copy-paste recipes (including hotkeys and MCM notes for non-C++ authors): [Usage.md](Usage.md). Player / overview: [README.md](README.md).
 
@@ -921,7 +922,122 @@ Player-oriented summary: [README.md: MCM translation layer](README.md#mcm-transl
 
 ---
 
-## 12. Loading Textures and Images
+## 12. Localizing Plugin Menus
+
+The framework does **not** expose a public localization API for third-party plugins. `F4SEMenuFrameworkStrings.json` and the internal `Translations::Get` helper are for the framework's own UI only. Your plugin ships and loads its own strings.
+
+Pick the path that matches how you build the menu.
+
+### Path A: Native ImGui menu (`AddSectionItem`)
+
+Ship a JSON (or similar) file next to your DLL under `Data/F4SE/Plugins/`, resolve that path with `GetModuleHandleExW` + `GetModuleFileNameW` on an address inside your module (not the F4SE log directory), load it at startup, and look up keys when you draw.
+
+**Recommended layout** (matches how other plugins in this workspace do it):
+
+```
+Data/F4SE/Plugins/MyPlugin.dll
+Data/F4SE/Plugins/MyPlugin/Languages/en.json
+Data/F4SE/Plugins/MyPlugin/Languages/es.json
+Data/F4SE/Plugins/MyPlugin/Languages/de.json
+```
+
+**English file example** (`en.json`):
+
+```json
+{
+  "Window.Title": "My Mod Settings",
+  "Option.Enable": "Enable feature",
+  "Option.Enable.Help": "Turns the feature on or off.",
+  "Button.Reset": "Reset to defaults"
+}
+```
+
+**Usage in your render callback:**
+
+```cpp
+// Load once at plugin init (or the first time the menu opens).
+// Prefer UTF-8 JSON. Keep English as the fallback when a key is missing
+// in the active language file.
+ImGuiMCP::Text("%s", Loc("Window.Title"));
+if (ImGuiMCP::Checkbox(Loc("Option.Enable"), &enabled)) { /* ... */ }
+if (ImGuiMCP::IsItemHovered()) {
+    ImGuiMCP::SetTooltip("%s", Loc("Option.Enable.Help"));
+}
+```
+
+**Choosing the language file.** Read the player's `sLanguage` the same way the game and MCM do:
+
+1. `Documents\My Games\Fallout4\Fallout4Custom.ini` → `[General] sLanguage=`
+2. Else `Fallout4.ini` in the same folder
+3. Else default to `en`
+
+Common codes: `en`, `de`, `es`, `fr`, `it`, `ja`, `ko`, `pl`, `ptbr`, `ru`, `zh`. Map the code to your filename (`es` → `es.json`). If that file is missing, fall back to English.
+
+**Practical tips:**
+
+- Store looked-up strings (or keep the JSON tree alive) so `Loc()` can return a stable `const char*` for ImGui. Do not return a temporary `std::string` by address.
+- Keep keys stable across releases (`Option.Enable`). Translate the values, not the keys.
+- Ship English with the mod. Other languages can be community files dropped into the same folder.
+- Put language files under your plugin's subfolder (`MyPlugin/Languages/`), not loose in `Plugins/`, so they stay with your assets.
+
+A worked example of a full language manager lives in True See Through Scopes (`src/UI/Localization/`), including per-language JSON files and English fallback.
+
+### Path B: MCM package hosted by the translation layer
+
+If your menu is a normal MCM `config.json` (hosted under **MCM Mod Configs (Legacy)**), use MCM's own translation files. No C++ required.
+
+**Layout:**
+
+```
+Data/MCM/Config/MyMod/config.json
+Data/MCM/Config/MyMod/Translation/Translate_en.txt
+Data/MCM/Config/MyMod/Translation/Translate_es.txt
+Data/MCM/Config/MyMod/Translation/Translate_de.txt
+```
+
+**In `config.json`, use `$` keys for display strings:**
+
+```json
+{
+  "modName": "MyMod",
+  "displayName": "$MyMod_DisplayName",
+  "content": [
+    {
+      "text": "$MyMod_Enable",
+      "type": "switcher",
+      "id": "bEnable:Main",
+      "help": "$MyMod_Enable_Help",
+      "valueOptions": { "sourceType": "ModSettingBool" }
+    }
+  ]
+}
+```
+
+**In `Translate_en.txt` (tab-separated `$Key` then value):**
+
+```
+$MyMod_DisplayName	My Mod
+$MyMod_Enable	Enable feature
+$MyMod_Enable_Help	Turns the feature on or off.
+```
+
+Rules the framework's MCM layer follows (same as real MCM):
+
+- Lines must start with `$` and contain a tab between key and value. Other lines are skipped.
+- Load order: English / unsuffixed files first, then the active language's `Translate_<lang>.txt` overrides per key.
+- Active language comes from the player's `sLanguage` (Custom.ini first, then Fallout4.ini).
+- Values may use `\n` / `\t` escapes and `{newline}` for line breaks. HTML / Scaleform tags such as `<font ...>` are stripped for ImGui display.
+- Some mods also ship `Data/Interface/Translations/<ModName>_<lang>.txt`; the layer probes those naming conventions as well.
+
+### What not to do
+
+- Do not edit or depend on `F4SEMenuFrameworkStrings.json` for your mod's strings. That file is owned by the framework and can change between versions.
+- Do not put shipping string tables under the F4SE log directory (`Documents\...\F4SE\`). Config and language files belong next to your DLL under `Data/F4SE/Plugins/`.
+- Do not hardcode only one language if you expect community translations: a simple key lookup plus an `en` fallback is enough for others to add files.
+
+---
+
+## 13. Loading Textures and Images
 
 The framework can load PNG, JPG, and SVG images for use as ImGui textures. Results are cached internally.
 
@@ -947,7 +1063,7 @@ void __stdcall MyRender() {
 
 ---
 
-## 13. Font Awesome Icons
+## 14. Font Awesome Icons
 
 The framework bundles Font Awesome 6. Use the helper functions to push icon fonts:
 
@@ -980,7 +1096,7 @@ Find icon Unicode codepoints at [fontawesome.com/icons](https://fontawesome.com/
 
 ---
 
-## 14. Working with Game Forms (CommonLibF4)
+## 15. Working with Game Forms (CommonLibF4)
 
 ### Looking Up Forms
 
@@ -1042,7 +1158,7 @@ F4SE::GetMessagingInterface()->RegisterListener(
 
 ---
 
-## 15. Build and Deploy
+## 16. Build and Deploy
 
 ### Configure and Build
 
@@ -1080,7 +1196,7 @@ Set the `FALLOUT4_FOLDER` environment variable to your game install path and the
 
 ---
 
-## 16. Gotchas and F4SE-Specific Differences
+## 17. Gotchas and F4SE-Specific Differences
 
 ### vs. SKSE Menu Framework
 
@@ -1130,7 +1246,7 @@ If you're porting a plugin from the SKSE version, here are the key changes:
 
 ---
 
-## 17. Complete Minimal Plugin
+## 18. Complete Minimal Plugin
 
 Here is the absolute minimum for a working plugin with one menu page:
 
@@ -1244,7 +1360,7 @@ Build it, drop the DLL into `Data/F4SE/Plugins/` (with the framework installed),
 
 ---
 
-## 18. Framework Internals: How the Hooks Work
+## 19. Framework Internals: How the Hooks Work
 
 This section documents how the framework hooks into the game engine. You don't need to do any of this in your consumer plugin, the framework handles it all. This is reference material for understanding what happens behind the scenes and for anyone maintaining or forking the framework.
 
