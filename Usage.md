@@ -142,7 +142,7 @@ Pass `false` as the second argument for a non-blocking gameplay overlay (stays u
 
 ## Plugin Hotkey API
 
-The framework owns keyboard (WndProc) and gamepad (XInput poll) dispatch and persists bindings in the `[Hotkeys]` section of `F4SEMenuFramework.ini`. Your plugin does **not** need its own WndProc hook for simple toggle keys.
+The framework owns keyboard (WndProc) and gamepad (XInput poll) dispatch and persists bindings in the `[Hotkeys]` section of `Data/F4SE/Plugins/F4SEMenuFramework/PluginHotkeys.ini` (inside the framework's asset folder, next to `Fonts/` and `Themes/`). That file is created at runtime and is never shipped with the mod, so updating the framework cannot overwrite a player's rebinds (bindings saved by older versions into `F4SEMenuFramework.ini` are migrated over automatically on first run). Your plugin does **not** need its own WndProc hook for simple toggle keys.
 
 ### Register a keyboard hotkey
 
@@ -197,7 +197,7 @@ if (F4SEMenuFramework::IsControllerConnected()) {
 }
 ```
 
-Gamepad bindings are stored in `[Hotkeys]` with names like `A` / `LB` (not DIK names).
+Gamepad bindings are stored in the same `[Hotkeys]` section with names like `A` / `LB` (not DIK names).
 
 ### Query / rebind from your own UI
 
@@ -248,7 +248,7 @@ F4SEMenuFramework::Hotkeys::Unregister(handle);
 
 ## Plugin localization
 
-**Making a language pack for someone else's mod?** Use the beginner guide: [LANGUAGE_PACKS.md](LANGUAGE_PACKS.md). Capture strings in game, fill in `es.json` (or your language), ship it under `Data/F4SE/Plugins/<Mod Name>/Languages/`. No coding.
+**Making a language pack for someone else's mod?** Use the beginner guide: [LANGUAGE_PACKS.md](LANGUAGE_PACKS.md). Capture strings in game, fill in `es.json` (or your language), ship it under `Data/F4SE/Plugins/<DllName>/Languages/` (the mod's DLL file name without `.dll`). No coding.
 
 **As a plugin author**, you usually do nothing: the framework auto-translates ImGui text your menu draws. Optional C++ API if you want ID-style keys:
 
@@ -261,7 +261,7 @@ F4SEMenuFramework::AddSectionItem("Settings", [] {
 });
 ```
 
-Files go next to your DLL: `Data/F4SE/Plugins/MyPlugin/Languages/<lang>.json`. Lookup order: active language, then `en.json`, then the key itself (`en.json` optional if keys are English text). Helpers: `LoadTranslations()`, `ReloadTranslations()`, `GetGameLanguage()`. Source scanner: `tools/extract_translations.bat <srcDir> <en.json>`. Full author notes: [PLUGIN_DEVELOPMENT_GUIDE.md](PLUGIN_DEVELOPMENT_GUIDE.md) section 12.
+Files go next to your DLL, in a folder matching the DLL file name: `MyPlugin.dll` reads `Data/F4SE/Plugins/MyPlugin/Languages/<lang>.json` (the `SetSection` display name is not used for the folder). Lookup order: active language, then `en.json`, then the key itself (`en.json` optional if keys are English text). Helpers: `LoadTranslations()`, `ReloadTranslations()`, `GetGameLanguage()`. Source scanner: `tools/extract_translations.bat <srcDir> <en.json>`. Full author notes: [PLUGIN_DEVELOPMENT_GUIDE.md](PLUGIN_DEVELOPMENT_GUIDE.md) section 12.
 
 ---
 

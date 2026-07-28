@@ -5,6 +5,82 @@
 #include "WindowManager.h"
 #include "MCM/MCMKeybindStore.h"
 #include "imgui.h"
+#include <filesystem>
+
+// --- Plugin hotkey persistence file ---
+// Plugin hotkey bindings live in their own user-data INI, NOT in
+// F4SEMenuFramework.ini: the main INI ships with the mod, so every mod
+// update used to overwrite the player's rebinds. This file is created at
+// runtime (never shipped) and therefore survives updates; under MO2 it
+// lands in overwrite like other user data. It sits inside the framework's
+// asset folder (F4SEMenuFramework/, next to Fonts/ and Themes/) so the
+// shared Plugins root stays uncluttered. The framework's own toggle keys
+// ([General] ToggleKey / ToggleKeyGamePad) intentionally stay in the main
+// INI.
+namespace {
+
+    // Relative to Data/F4SE/Plugins/ (the Ini class prepends that).
+    constexpr const char* kPluginHotkeysFile = "F4SEMenuFramework/PluginHotkeys.ini";
+    constexpr const char* kHotkeysSection = "Hotkeys";
+
+    // The asset folder ships with the mod, but SaveFile cannot create
+    // directories, so guard the first write in case a user pruned it.
+    void EnsureHotkeysDir() {
+        std::error_code ec;
+        std::filesystem::create_directories("Data/F4SE/Plugins/F4SEMenuFramework", ec);
+    }
+
+    // One-time migration of bindings saved by older versions into
+    // [Hotkeys] of F4SEMenuFramework.ini. Existing entries in the new file
+    // win (a stale main INI must not clobber newer rebinds); the legacy
+    // section is then removed so future mod updates carry no bindings.
+    void MigrateLegacyHotkeys() {
+        static bool done = false;
+        if (done) return;
+        done = true;
+
+        Ini legacy("F4SEMenuFramework.ini");
+        const auto keys = legacy.GetKeys(kHotkeysSection);
+        if (keys.empty()) return;
+
+        Ini fresh(kPluginHotkeysFile, /*createIfMissing=*/true);
+        fresh.SetSection(kHotkeysSection);
+        legacy.SetSection(kHotkeysSection);
+
+        int copied = 0;
+        for (const auto& key : keys) {
+            const char* existing = fresh.GetString(key.c_str(), "");
+            if (existing && existing[0] != '\0') continue;
+            fresh.SetString(key.c_str(), legacy.GetString(key.c_str(), ""));
+            ++copied;
+        }
+
+        // The new file must be safely on disk BEFORE the legacy section is
+        // deleted; if that write fails, keep the legacy bindings so the
+        // migration retries next launch instead of erasing the user's binds.
+        // (copied == 0 means every key already exists in the new file, so
+        // the legacy copy is redundant and safe to remove without a write.)
+        bool savedOk = true;
+        if (copied > 0) {
+            EnsureHotkeysDir();
+            savedOk = fresh.Save();
+        }
+        if (!savedOk) {
+            logger::warn("[HotkeyManager] Could not write {} - keeping legacy "
+                         "[Hotkeys] in F4SEMenuFramework.ini and retrying next launch",
+                         kPluginHotkeysFile);
+            return;
+        }
+
+        if (legacy.DeleteSection(kHotkeysSection)) {
+            legacy.Save();
+        }
+        logger::info("[HotkeyManager] Migrated {} legacy binding(s) from "
+                     "F4SEMenuFramework.ini to {}",
+                     copied, kPluginHotkeysFile);
+    }
+
+}
 
 // --- Conflict confirmation dialog state ---
 // Centered modal that blocks hotkey rebinding until the user confirms or cancels.
@@ -207,8 +283,9 @@ int64_t HotkeyManager::Register(const char* id, unsigned int defaultScanCode, Ho
     // If a persisted binding exists in INI, override the default.
     // (Load() populates entriesByHandle on startup; late registrations
     //  need to check the INI lazily.)
-    const auto ini = new Ini("F4SEMenuFramework.ini");
-    ini->SetSection("Hotkeys");
+    MigrateLegacyHotkeys();
+    const auto ini = new Ini(kPluginHotkeysFile);
+    ini->SetSection(kHotkeysSection);
     const char* val = ini->GetString(strId.c_str(), "");
     if (val && val[0] != '\0') {
         int resolved = GetKeyBinding(std::string(val));
@@ -368,8 +445,9 @@ int64_t HotkeyManager::RegisterGamepad(const char* id, unsigned int defaultConfi
     idToHandle[strId] = handle;
 
     // Check INI for persisted gamepad binding
-    const auto ini = new Ini("F4SEMenuFramework.ini");
-    ini->SetSection("Hotkeys");
+    MigrateLegacyHotkeys();
+    const auto ini = new Ini(kPluginHotkeysFile);
+    ini->SetSection(kHotkeysSection);
     const char* val = ini->GetString(strId.c_str(), "");
     if (val && val[0] != '\0') {
         int resolved = GetKeyBinding(std::string(val), RE::INPUT_DEVICE::kGamepad);
@@ -411,12 +489,13 @@ void HotkeyManager::DispatchGamepadTrigger(unsigned int configCode) {
 }
 
 void HotkeyManager::Load() {
-    const auto ini = new Ini("F4SEMenuFramework.ini");
+    MigrateLegacyHotkeys();
+    const auto ini = new Ini(kPluginHotkeysFile);
     if (!ini->IsOpened()) {
         delete ini;
         return;
     }
-    ini->SetSection("Hotkeys");
+    ini->SetSection(kHotkeysSection);
 
     // Update any already-registered entries with persisted values.
     // Keyboard and gamepad use different name tables (F2 vs LB), so resolve
@@ -438,8 +517,12 @@ void HotkeyManager::Load() {
 }
 
 void HotkeyManager::Save() {
-    const auto ini = new Ini("F4SEMenuFramework.ini");
-    ini->SetSection("Hotkeys");
+    MigrateLegacyHotkeys();
+    // createIfMissing: the file does not ship with the mod, so the first
+    // rebind a player makes must be able to create it.
+    EnsureHotkeysDir();
+    const auto ini = new Ini(kPluginHotkeysFile, /*createIfMissing=*/true);
+    ini->SetSection(kHotkeysSection);
 
     for (auto& [handle, entry] : entriesByHandle) {
         const auto device = entry.device == HotkeyDevice::Gamepad

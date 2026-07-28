@@ -87,7 +87,7 @@ API recipes (windows, Font Awesome, hotkeys, MCM notes): [Usage.md](Usage.md)
 
 ## Hotkey API (plugin authors)
 
-Register named hotkeys; the framework dispatches them and saves bindings under `[Hotkeys]` in `F4SEMenuFramework.ini`.
+Register named hotkeys; the framework dispatches them and saves bindings under `[Hotkeys]` in `F4SEMenuFramework/PluginHotkeys.ini` (a user-data file created at runtime, so mod updates never overwrite rebinds).
 
 ```cpp
 void __stdcall OnToggleOverlay() { /* ... */ }

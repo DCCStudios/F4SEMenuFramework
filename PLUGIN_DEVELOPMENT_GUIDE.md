@@ -808,7 +808,7 @@ RE::INPUT_DEVICE::kGamepad
 
 ## 10. Plugin Hotkey API
 
-Register named hotkeys without writing your own WndProc. The framework dispatches keyboard presses from its window procedure and gamepad presses from its XInput poll, and stores bindings in `[Hotkeys]` inside `F4SEMenuFramework.ini`.
+Register named hotkeys without writing your own WndProc. The framework dispatches keyboard presses from its window procedure and gamepad presses from its XInput poll, and stores bindings in `[Hotkeys]` inside `Data/F4SE/Plugins/F4SEMenuFramework/PluginHotkeys.ini` (the framework's asset folder, next to `Fonts/` and `Themes/`). That file is user data created at runtime (never shipped with the framework), so framework updates cannot overwrite player rebinds; bindings that older versions saved into `F4SEMenuFramework.ini` migrate over automatically on first run.
 
 ### Minimal example
 
@@ -929,7 +929,7 @@ Player-oriented summary: [README.md: MCM translation layer](README.md#mcm-transl
 1. Turn on `CaptureStrings` in `F4SEMenuFramework.ini`, browse the mod's pages in game, close the menu.
 2. Copy `captured_strings.json` to `es.json` (or your language code).
 3. Translate the right-hand values only. Keep left-hand keys and any `%` codes exact.
-4. Ship under `Data/F4SE/Plugins/<Mod Name>/Languages/`.
+4. Ship under `Data/F4SE/Plugins/<DllName>/Languages/` (the DLL file name without `.dll`).
 
 The rest of this section is for **plugin authors**. Do not edit `F4SEMenuFrameworkStrings.json` (framework UI only).
 
@@ -938,10 +938,10 @@ The rest of this section is for **plugin authors**. Do not edit `F4SEMenuFramewo
 Any text your plugin draws through the framework's ImGui exports (labels, titles, tooltips, combos, format strings, nav page titles) can be overridden by a community language file with **no code changes**. Folder:
 
 ```
-Data/F4SE/Plugins/<SetSection name>/Languages/<lang>.json
+Data/F4SE/Plugins/<DllName>/Languages/<lang>.json
 ```
 
-If the plugin never calls `SetSection`, the folder name is the DLL name without `.dll`. Keys are the exact English strings shown in the UI. Format strings are only substituted when the translation keeps the same `%` codes; a bad line falls back to English instead of crashing. Toggle: `[Localization] AutoTranslate` (default `true`).
+`<DllName>` is your plugin's DLL file name without `.dll` (`FPGunplayOverhaul.dll` reads from `FPGunplayOverhaul/Languages/`). The framework resolves it from the module that owns the render callback, so it always matches your plugin's own `Data/F4SE/Plugins/<DllName>/` data folder; the display name passed to `SetSection` plays no part. Keys are the exact English strings shown in the UI. Format strings are only substituted when the translation keeps the same `%` codes; a bad line falls back to English instead of crashing. Toggle: `[Localization] AutoTranslate` (default `true`).
 
 ### Optional: `Translate()` API (Path A)
 

@@ -29,21 +29,19 @@ Save the file as a language code, for example `es.json` for Spanish, `de.json` f
 
 ### 1. Find the plugin's folder name
 
-Open the framework menu and look at the mod's entry in the left list. The **top-level name** (for example `FP Gunplay Overhaul`) is usually the folder name you need.
-
-If you are unsure, look next to the mod's DLL:
+The folder name is the mod's **DLL file name without the `.dll` extension**. Look in `Data/F4SE/Plugins/` for the mod's DLL:
 
 ```
-Data/F4SE/Plugins/SomeMod.dll
+Data/F4SE/Plugins/FPGunplayOverhaul.dll
 ```
 
-Then the language folder is either:
+Then the language folder is:
 
 ```
-Data/F4SE/Plugins/<Name From The Menu>/Languages/
+Data/F4SE/Plugins/FPGunplayOverhaul/Languages/
 ```
 
-or, if that name does not exist as a folder yet, create it. Prefer the **menu section name** when the mod has one (it usually matches what you see in the tree).
+Create it if it does not exist yet. Do **not** use the display name you see in the framework menu (for example `FP Gunplay Overhaul` with spaces); menus often show a prettier name than the DLL. The framework identifies a plugin by its DLL, so the folder must match the DLL name exactly. Capture mode (next step) creates the correctly named folder for you, which is the easiest way to be sure.
 
 ### 2. Collect the English strings (capture mode)
 
@@ -76,6 +74,7 @@ CaptureStrings = false
 ### 3. Make your language file
 
 1. Copy `captured_strings.json` and rename the copy to your language, for example `es.json`.
+   The capture file alone does nothing; the framework only loads `en.json` and `<language>.json` (for example `es.json`). Leaving the capture file as `captured_strings.json` will not translate anything.
 2. Open it in a plain text editor (Notepad, Notepad++, VS Code). Do not use Word.
 3. Translate only the **right-hand** values. Keep the left-hand keys exactly as they are.
 4. Save as **UTF-8** if your editor offers an encoding choice.
@@ -114,7 +113,7 @@ Restart the game (or reload the modlist), open the mod's menu, and check that yo
 Your pack only needs the language files. Example layout for a Spanish pack:
 
 ```
-Data/F4SE/Plugins/FP Gunplay Overhaul/Languages/es.json
+Data/F4SE/Plugins/FPGunplayOverhaul/Languages/es.json
 ```
 
 Install it like any other mod (MO2 / Vortex). Put it **after** the original mod so your file wins if both ship a language file.
@@ -170,7 +169,7 @@ English comes from the mod itself. Your pack is usually just `es.json` (or whate
 1. Capture strings with `CaptureStrings = true`, then turn it off.
 2. Copy the capture file to `es.json` (or your language code).
 3. Translate values only; keep keys and `%` codes exact.
-4. Put the file under `Data/F4SE/Plugins/<Mod Name>/Languages/`.
+4. Put the file under `Data/F4SE/Plugins/<DllName>/Languages/` (DLL file name without `.dll`).
 5. Match the game's `sLanguage` to that file name.
 6. Test in game.
 

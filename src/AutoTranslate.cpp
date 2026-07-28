@@ -23,8 +23,7 @@ namespace AutoTranslate {
 
         // Per-plugin-module state. Lives for the session once created.
         struct PluginCtx {
-            std::string name;                 // translation folder name
-            bool sectionNamed = false;        // name came from AddSectionItem
+            std::string name;                 // translation folder name (DLL stem)
 
             // Cached "does this plugin have any translations" so the per-
             // widget hot path can bail without touching PluginLocalization.
@@ -210,13 +209,16 @@ namespace AutoTranslate {
             const HMODULE mod = ModuleFromAddress(renderFn);
             if (!mod || mod == SelfModule()) return;
 
-            // First path segment = the SetSection() name = the folder the
-            // explicit Translate() API already uses. Preferring it keeps
-            // one folder per mod for both mechanisms.
+            // The DLL file name stem is the canonical translation folder: it
+            // is verifiable from the module on disk and matches the plugin's
+            // own Data/F4SE/Plugins/<DllName>/ data folder convention. The
+            // section display name ("FP Gunplay Overhaul") is only a fallback
+            // for the pathological case where the module path could not be
+            // read, because display names routinely differ from the DLL name
+            // and used to send captures/lookups to the wrong folder.
             const char* slash = std::strchr(fullPath, '/');
             const std::string section = slash ? std::string(fullPath, slash)
                                               : std::string(fullPath);
-            if (section.empty()) return;
 
             std::lock_guard lock(s_mutex);
             auto& slot = s_ctxByModule[mod];
@@ -224,9 +226,8 @@ namespace AutoTranslate {
                 slot = std::make_unique<PluginCtx>();
                 slot->name = ModuleStem(mod);
             }
-            if (!slot->sectionNamed) {
+            if (slot->name.empty() && !section.empty()) {
                 slot->name = section;
-                slot->sectionNamed = true;
                 slot->gen = 0; // force hasStrings revalidation for the new name
             }
         } catch (...) {

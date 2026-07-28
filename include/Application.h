@@ -12,13 +12,37 @@ private:
     bool opened;
 
 public:
-    Ini(const char* filename) {
+    // `createIfMissing`: treat a missing file as an empty, writable INI so
+    // Save() creates it. Used for user-data files the mod does not ship
+    // (e.g. the plugin hotkeys INI), which must be creatable on first write.
+    Ini(const char* filename, bool createIfMissing = false) {
         _ini.SetUnicode();
         _filename = "Data/F4SE/Plugins/" + std::string(filename);
         opened = _ini.LoadFile(_filename.c_str()) >= 0;
+        if (!opened && createIfMissing) {
+            opened = true;
+        }
     }
 
     void SetSection(const char* section) { _section = section; }
+
+    // All key names in a section (empty when the section does not exist).
+    std::vector<std::string> GetKeys(const char* section) const {
+        std::vector<std::string> out;
+        if (!opened) return out;
+        CSimpleIniA::TNamesDepend keys;
+        if (_ini.GetAllKeys(section, keys)) {
+            keys.sort(CSimpleIniA::Entry::LoadOrder());
+            for (const auto& k : keys) out.emplace_back(k.pItem);
+        }
+        return out;
+    }
+
+    // Removes a whole section (returns false when it did not exist).
+    bool DeleteSection(const char* section) {
+        if (!opened) return false;
+        return _ini.Delete(section, nullptr, true);
+    }
 
     // Getter functions
     const char* GetString(const char* key, const char* def = "") const {

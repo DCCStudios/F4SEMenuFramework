@@ -16,7 +16,8 @@ enum class HotkeyDevice : uint8_t {
 // Lightweight hotkey registry for plugin authors.
 // Framework dispatches registered hotkeys via its WndProc hook (keyboard)
 // and GamepadInput::Poll() (controller), persisting bindings to the [Hotkeys]
-// section of F4SEMenuFramework.ini.
+// section of F4SEMenuFramework/PluginHotkeys.ini (user data created at
+// runtime; legacy bindings in F4SEMenuFramework.ini migrate on first run).
 // Mods are responsible for their own rebind UI if desired.
 class HotkeyManager {
 public:

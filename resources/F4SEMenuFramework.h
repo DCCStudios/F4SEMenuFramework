@@ -40,6 +40,32 @@ namespace F4SEMenuFramework {
             }
 
             inline std::string key;
+
+            // This plugin's own DLL file name without extension ("MyPlugin"
+            // from MyPlugin.dll). Because this header is compiled INTO the
+            // consumer plugin, the address of a local static lives inside the
+            // plugin's image, so resolving the module from that address yields
+            // the plugin DLL, not the framework. This is the canonical
+            // translation folder name (Data/F4SE/Plugins/<DllName>/Languages);
+            // unlike the SetSection() display name it is verifiable from disk.
+            inline const char* PluginModuleName() {
+                static const std::string name = [] {
+                    static int anchor = 0;
+                    HMODULE mod{};
+                    ::GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                         reinterpret_cast<LPCSTR>(&anchor), &mod);
+                    char buf[MAX_PATH]{};
+                    ::GetModuleFileNameA(mod, buf, MAX_PATH);
+                    std::string s(buf);
+                    const size_t slash = s.find_last_of("\\/");
+                    if (slash != std::string::npos) s.erase(0, slash + 1);
+                    const size_t dot = s.find_last_of('.');
+                    if (dot != std::string::npos) s.erase(dot);
+                    return s;
+                }();
+                return name.c_str();
+            }
         }
 
         class WindowInterface {
@@ -157,7 +183,10 @@ namespace F4SEMenuFramework {
     //  Plugin Hotkey API
     //
     //  Register named hotkeys that the framework dispatches via its WndProc hook.
-    //  Bindings are persisted to the [Hotkeys] section of F4SEMenuFramework.ini.
+    //  Bindings are persisted to the [Hotkeys] section of
+    //  Data/F4SE/Plugins/F4SEMenuFramework/PluginHotkeys.ini (user data
+    //  created at runtime, so framework updates never overwrite a player's
+    //  rebinds).
     //  Plugins handle their own rebind UI if desired; the framework provides
     //  query/set helpers for the current binding.
     // =========================================================================
@@ -220,7 +249,8 @@ namespace F4SEMenuFramework {
 
         // Register a gamepad hotkey. defaultConfigCode uses the same button codes as the
         // framework's gamepad toggle setting (e.g. 4096=A, 8192=B, 256=LB, 9=LT, 10=RT).
-        // Persisted under [Hotkeys] with gamepad names (A, LB, ...).
+        // Persisted under [Hotkeys] in F4SEMenuFramework/PluginHotkeys.ini
+        // with gamepad names (A, LB, ...).
         inline int64_t RegisterGamepad(const char* id, unsigned int defaultConfigCode, HotkeyCallback callback) {
             static auto func = Model::Internal::GetFunction<RegisterFunction>("RegisterGamepadHotkey");
             if (func) {
@@ -296,9 +326,10 @@ namespace F4SEMenuFramework {
     //  Returned pointers are stable for the session (until Reload), so they
     //  are safe to hand straight to ImGui every frame.
     //
-    //  The single-argument overloads use the name passed to SetSection() as
-    //  the plugin folder name; call SetSection() first or use the explicit
-    //  pluginName overloads.
+    //  The single-argument overloads use this plugin's DLL file name (without
+    //  .dll) as the folder name; the framework's automatic backend translation
+    //  resolves the same name from the module, so both mechanisms share one
+    //  folder. Use the explicit pluginName overloads only to deviate.
     //
     //  On an older framework DLL without this API, Translate() returns the
     //  key itself, so plugins degrade to English instead of crashing.
@@ -311,7 +342,7 @@ namespace F4SEMenuFramework {
     }
 
     inline const char* Translate(const char* key) {
-        return Translate(Model::Internal::key.c_str(), key);
+        return Translate(Model::Internal::PluginModuleName(), key);
     }
 
     // Optional eager load (Translate lazy-loads on first use). Returns the
@@ -321,7 +352,7 @@ namespace F4SEMenuFramework {
         using Fn = int (*)(const char*);
         static auto func = Model::Internal::GetFunction<Fn>("LoadPluginTranslations");
         if (!func) return -1;
-        return func(pluginName && *pluginName ? pluginName : Model::Internal::key.c_str());
+        return func(pluginName && *pluginName ? pluginName : Model::Internal::PluginModuleName());
     }
 
     // Drops the cached table so the next Translate() re-reads from disk.
@@ -330,7 +361,7 @@ namespace F4SEMenuFramework {
         using Fn = void (*)(const char*);
         static auto func = Model::Internal::GetFunction<Fn>("ReloadPluginTranslations");
         if (func) {
-            func(pluginName && *pluginName ? pluginName : Model::Internal::key.c_str());
+            func(pluginName && *pluginName ? pluginName : Model::Internal::PluginModuleName());
         }
     }
 

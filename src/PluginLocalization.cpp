@@ -97,6 +97,21 @@ namespace PluginLocalization {
                                ? static_cast<int>(t.strings.size())
                                : -1;
             s_generation.fetch_add(1, std::memory_order_relaxed);
+
+            // One line per plugin the first time its table is asked for, so a
+            // missing Languages/<lang>.json (or a wrong folder name) shows up
+            // in the log instead of silently falling back to English.
+            if (t.loadResult >= 0) {
+                logger::info("PluginLocalization: loaded {} key(s) for '{}' "
+                             "(lang='{}', en.json={}, {}.json={})",
+                             t.loadResult, pluginName, lang,
+                             haveBase ? "yes" : "no",
+                             lang, haveLang ? "yes" : "no");
+            } else {
+                logger::info("PluginLocalization: no language files for '{}' "
+                             "under '{}' (lang='{}')",
+                             pluginName, dir.string(), lang);
+            }
         }
 
         Table& EnsureLoaded(const std::string& pluginName) {
