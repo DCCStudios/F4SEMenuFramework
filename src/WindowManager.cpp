@@ -1,5 +1,6 @@
 #include "WindowManager.h"
 #include "Event.h"
+#include "AutoTranslate.h"
 
 Window::Window() {
 	Interface = new WindowInterface();
@@ -36,6 +37,9 @@ void WindowManager::Close() {
         }
     }
     Event::DispatchEvent(Event::EventType::kCloseMenu);
+    // Translator aid: write any newly captured plugin UI strings now that
+    // the menu is closing (no-op unless capture mode is on).
+    AutoTranslate::FlushCapture();
 }
 
 void WindowManager::Open() {

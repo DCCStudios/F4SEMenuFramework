@@ -2,6 +2,11 @@
 
 All notable changes to F4SE Menu Framework are documented in this file.
 
+## [Unreleased]
+
+- **Plugin localization API** (API version 3.9): third-party plugins can ship flat JSON language files at `Data/F4SE/Plugins/<PluginName>/Languages/<lang>.json` and call `F4SEMenuFramework::Translate()` when drawing. The framework resolves the player's `sLanguage`, merges the language file over the `en.json` base, and falls back to the key itself, so `en.json` is optional and English-text keys work with no files at all. Includes `LoadTranslations` / `ReloadTranslations` / `GetGameLanguage` helpers, ANSI-to-UTF-8 conversion for community files, and graceful English fallback on older framework DLLs. New `tools/extract_translations.bat` generates or updates `en.json` from the `Translate("...")` calls in a plugin's source tree.
+- **Automatic backend translation of plugin menus**: plugins render through the framework's exported ImGui functions, so the framework now substitutes translated strings transparently while a third-party render callback runs (labels, window/popup titles, tooltips, combo and list items, nav page titles, format strings). Any existing framework plugin becomes translatable by dropping the same `Languages/<lang>.json` files, no plugin update required. New `[Localization]` INI section: `AutoTranslate` (default on; a no-op without translation files) and `CaptureStrings` (writes per-plugin `captured_strings.json` skeletons of every string seen, so translators need no source access). Crash-safe by construction: format strings are only substituted when the translation's printf specifiers match the original exactly (`%n` never accepted, mismatches log and fall back to English), lookup misses pass through without interning, and every entry point swallows failures back to the original text.
+
 ## [3.3.1] (2026-07-26)
 
 - **Fixed the Windows hourglass / wait cursor showing while the menu is open.** The overlay draws ImGui's software cursor and sets `ImGuiConfigFlags_NoMouseCursorChange` so it never fights the game's OS cursor when closed. That flag also disabled the Win32 backend's `SetCursor(nullptr)` path, so the game's wait cursor stayed visible underneath the ImGui arrow. The OS cursor is now hidden explicitly each frame and on `WM_SETCURSOR` while the blocking menu is open.

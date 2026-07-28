@@ -9,6 +9,7 @@
 #include "MCM/SWFLibraryImage.h"
 #include "MCM/SWFVectorMovie.h"
 #include "MCM/FallUIHudEditor.h"
+#include "MCM/MCMSettingsManagerPage.h"
 #include "F4SEMenuFramework.h"
 #include "Application.h"
 #include "GamepadInput.h"
@@ -1176,6 +1177,11 @@ namespace MCMWidgetRenderer {
             // Library preset manager). Those need a live Scaleform stage we
             // don't have, so a native ImGui recreation takes over the control.
             FallUIHudEditor::RenderImageControl(ctrl.imageLibName, ctrl.imageClassName);
+        } else if (ctrl.type == "image" &&
+                   MCMSettingsManagerPage::HandlesImageControl(ctrl.imageLibName, ctrl.imageClassName)) {
+            // MCM Settings Manager is another full AS3 app in an "image"
+            // control — replaced by a native recreation the same way.
+            MCMSettingsManagerPage::RenderImageControl(ctrl.imageLibName, ctrl.imageClassName);
         } else if (ctrl.type == "image" && IsInvisibleShimImage(ctrl.imageClassName)) {
             // Intentionally rendered as nothing — see IsInvisibleShimImage.
         } else if (ctrl.type == "image" && IsIntroBackdropImage(ctrl.imageClassName)) {
@@ -1633,6 +1639,7 @@ namespace MCMWidgetRenderer {
         // The FallUI editor recreation caches its whole session (widgets,
         // profiles, global settings) — drop it so it re-reads the INIs too.
         FallUIHudEditor::ResetSession();
+        MCMSettingsManagerPage::ResetSession();
         logger::debug("[MCMWidgetRenderer] All control states invalidated (RefreshMenu)");
     }
 
@@ -1654,6 +1661,7 @@ namespace MCMWidgetRenderer {
                 // Leaving a page destroys the original Flash apps too — drop
                 // the FallUI editor session so reopening reloads from the INIs.
                 FallUIHudEditor::ResetSession();
+                MCMSettingsManagerPage::ResetSession();
             }
             // Legacy OnMCMClose fires when the user leaves MCM entirely (menu
             // closed or navigated to a non-MCM page). Native mods hang their
@@ -1713,6 +1721,13 @@ namespace MCMWidgetRenderer {
 
     void SetPageSearchFilter(const char* text) {
         s_pageSearch = text ? text : "";
+    }
+
+    void VisitMods(const std::function<void(const std::string& modName,
+                                            const MCMConfigParser::MCMModConfig& config)>& fn) {
+        for (const auto& [modName, ctx] : s_contexts) {
+            if (ctx) fn(modName, ctx->config);
+        }
     }
 
 } // namespace MCMWidgetRenderer

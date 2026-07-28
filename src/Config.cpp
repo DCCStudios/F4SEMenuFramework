@@ -1,5 +1,6 @@
 #include "Config.h"
 #include "Application.h"
+#include "AutoTranslate.h"
 #include "Theme.h"
 #include "Utils.h"
 unsigned int Config::ToggleKey = 0x3B;
@@ -22,6 +23,8 @@ float Config::FontSizeBig = 64.0f;
 bool Config::MCMCompatEnabled = true;
 bool Config::MCMCompatWhenNativePresent = true;
 int Config::GamepadGlyphStyle = 0;
+bool Config::AutoTranslatePlugins = true;
+bool Config::CaptureUIStrings = false;
 
 
 void Config::Init() {
@@ -65,6 +68,16 @@ void Config::Init() {
     ini->SetSection("MCMCompat");
     MCMCompatEnabled = ini->GetBool("Enabled", true);
     MCMCompatWhenNativePresent = ini->GetBool("MCMCompatWhenNativePresent", true);
+
+    // Automatic backend translation of third-party plugin UI text.
+    // AutoTranslate substitutes JSON translations transparently (safe no-op
+    // when a plugin ships no Languages files); CaptureStrings additionally
+    // writes per-plugin skeleton JSONs of every string seen, for translators.
+    ini->SetSection("Localization");
+    AutoTranslatePlugins = ini->GetBool("AutoTranslate", true);
+    CaptureUIStrings = ini->GetBool("CaptureStrings", false);
+    AutoTranslate::SetEnabled(AutoTranslatePlugins);
+    AutoTranslate::SetCaptureEnabled(CaptureUIStrings);
 
     // Gamepad glyph platform: "xbox" (default) or "playstation"
     ini->SetSection("Gamepad");
@@ -138,6 +151,11 @@ void Config::Save() {
     ini->SetSection("MCMCompat");
     ini->SetBool("Enabled", MCMCompatEnabled);
     ini->SetBool("MCMCompatWhenNativePresent", MCMCompatWhenNativePresent);
+
+    // Localization Section
+    ini->SetSection("Localization");
+    ini->SetBool("AutoTranslate", AutoTranslatePlugins);
+    ini->SetBool("CaptureStrings", CaptureUIStrings);
 
     // Gamepad Section
     ini->SetSection("Gamepad");

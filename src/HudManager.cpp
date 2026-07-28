@@ -1,4 +1,5 @@
 #include "HudManager.h"
+#include "AutoTranslate.h"
 
 void HudManager::Render() {
     // Iterate over a snapshot: a callback is allowed to register or unregister
@@ -9,6 +10,8 @@ void HudManager::Render() {
     // small map of function pointers first makes that reentrancy safe.
     auto snapshot = callbacks;
     for (auto& item : snapshot) {
+        // Auto-translate text drawn by third-party HUD elements.
+        AutoTranslate::Scope autoLoc(reinterpret_cast<void*>(item.second));
         item.second();
     }
 }

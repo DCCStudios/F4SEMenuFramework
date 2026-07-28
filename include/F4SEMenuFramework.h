@@ -40,3 +40,12 @@ FUNCTION_PREFIX bool HasHotkeyConflict(unsigned int scanCode, const char* exclud
 
 // --- Gamepad Query API ---
 FUNCTION_PREFIX bool IsControllerConnected();
+
+// --- Plugin Localization API ---
+// Per-plugin JSON string tables loaded from
+// Data/F4SE/Plugins/<pluginName>/Languages/<lang>.json. See
+// include/PluginLocalization.h for the fallback semantics.
+FUNCTION_PREFIX const char* GetPluginTranslation(const char* pluginName, const char* key);
+FUNCTION_PREFIX int LoadPluginTranslations(const char* pluginName);
+FUNCTION_PREFIX void ReloadPluginTranslations(const char* pluginName);
+FUNCTION_PREFIX const char* GetGameLanguage();

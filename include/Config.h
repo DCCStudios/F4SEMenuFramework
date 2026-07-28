@@ -31,4 +31,9 @@ class Config {
     // Gamepad UX: which button glyph art the hint bar uses.
     // 0 = Xbox (default), 1 = PlayStation.
     static int GamepadGlyphStyle;
+
+    // Automatic backend translation of third-party plugin UI text
+    // ([Localization] in the INI; see AutoTranslate.h).
+    static bool AutoTranslatePlugins;
+    static bool CaptureUIStrings;
 };

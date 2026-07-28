@@ -277,6 +277,69 @@ namespace F4SEMenuFramework {
             }
         }
     }
+
+    // =========================================================================
+    //  Plugin Localization API (framework 3.9+)
+    //
+    //  Ship flat key/value JSON files at
+    //      Data/F4SE/Plugins/<PluginName>/Languages/<lang>.json
+    //  (en.json, es.json, de.json, ...) and call Translate() when drawing.
+    //  The framework picks the player's game language (sLanguage from
+    //  Fallout4Custom.ini / Fallout4.ini), merges it over the en.json base,
+    //  and falls back to the key itself when no value exists.
+    //
+    //  That last fallback means en.json is OPTIONAL: you may simply use your
+    //  English text as the key (Translate("Enable feature")) and ship no
+    //  files at all; translators can later add es.json etc. mapping those
+    //  English strings.
+    //
+    //  Returned pointers are stable for the session (until Reload), so they
+    //  are safe to hand straight to ImGui every frame.
+    //
+    //  The single-argument overloads use the name passed to SetSection() as
+    //  the plugin folder name; call SetSection() first or use the explicit
+    //  pluginName overloads.
+    //
+    //  On an older framework DLL without this API, Translate() returns the
+    //  key itself, so plugins degrade to English instead of crashing.
+    // =========================================================================
+
+    inline const char* Translate(const char* pluginName, const char* key) {
+        using Fn = const char* (*)(const char*, const char*);
+        static auto func = Model::Internal::GetFunction<Fn>("GetPluginTranslation");
+        return func ? func(pluginName, key) : key;
+    }
+
+    inline const char* Translate(const char* key) {
+        return Translate(Model::Internal::key.c_str(), key);
+    }
+
+    // Optional eager load (Translate lazy-loads on first use). Returns the
+    // merged key count, or -1 when the plugin ships no Languages files
+    // (which is fine for the English-text-as-key convention).
+    inline int LoadTranslations(const char* pluginName = nullptr) {
+        using Fn = int (*)(const char*);
+        static auto func = Model::Internal::GetFunction<Fn>("LoadPluginTranslations");
+        if (!func) return -1;
+        return func(pluginName && *pluginName ? pluginName : Model::Internal::key.c_str());
+    }
+
+    // Drops the cached table so the next Translate() re-reads from disk.
+    // Invalidates previously returned pointers for that plugin.
+    inline void ReloadTranslations(const char* pluginName = nullptr) {
+        using Fn = void (*)(const char*);
+        static auto func = Model::Internal::GetFunction<Fn>("ReloadPluginTranslations");
+        if (func) {
+            func(pluginName && *pluginName ? pluginName : Model::Internal::key.c_str());
+        }
+    }
+
+    // The resolved game language code ("en", "es", "de", ...).
+    inline const char* GetGameLanguage() {
+        using Fn = const char* (*)();
+        static auto func = Model::Internal::GetFunction<Fn>("GetGameLanguage");
+        return func ? func() : "en";
+    }
 }
 namespace FontAwesome {
     inline void PushSolid() {

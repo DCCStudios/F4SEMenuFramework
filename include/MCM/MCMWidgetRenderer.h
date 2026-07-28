@@ -49,4 +49,10 @@ namespace MCMWidgetRenderer {
     // headers stay visible when anything inside them matches.
     void SetPageSearchFilter(const char* text);
 
+    // Visits every registered translated MCM mod (modName + parsed config,
+    // display strings already translated). Used by the native MCM Settings
+    // Manager recreation to enumerate every mod's savable settings.
+    void VisitMods(const std::function<void(const std::string& modName,
+                                            const MCMConfigParser::MCMModConfig& config)>& fn);
+
 }

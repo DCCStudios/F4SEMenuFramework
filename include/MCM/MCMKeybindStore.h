@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Two-way sync with the real MCM's user keybind file:
@@ -35,6 +36,12 @@ namespace MCMKeybindStore {
     // or nullopt if the file has no entry for it. A stored keycode that can't
     // be translated also yields nullopt.
     std::optional<unsigned int> GetSavedDIK(const std::string& modName, const std::string& keybindId);
+
+    // Returns the raw stored (VK keycode, modifiers bitmask) pair exactly as
+    // Keybinds.json holds it, or nullopt when no entry exists. Used by the
+    // MCM Settings Manager recreation, whose slot format stores hotkeys as
+    // "keycode;modifiers" strings in MCM's own (VK) key space.
+    std::optional<std::pair<int, int>> GetSavedRaw(const std::string& modName, const std::string& keybindId);
 
     // Associates a framework hotkey id ("MCM.<mod>.<id>") with its MCM identity
     // so binding-change notifications can be routed back to Keybinds.json.

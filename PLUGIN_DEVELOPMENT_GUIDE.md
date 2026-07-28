@@ -924,116 +924,67 @@ Player-oriented summary: [README.md: MCM translation layer](README.md#mcm-transl
 
 ## 12. Localizing Plugin Menus
 
-The framework does **not** expose a public localization API for third-party plugins. `F4SEMenuFrameworkStrings.json` and the internal `Translations::Get` helper are for the framework's own UI only. Your plugin ships and loads its own strings.
+**If you only want to translate a mod's menu into another language**, start here: [LANGUAGE_PACKS.md](LANGUAGE_PACKS.md). That guide is for translators (no coding). Summary:
 
-Pick the path that matches how you build the menu.
+1. Turn on `CaptureStrings` in `F4SEMenuFramework.ini`, browse the mod's pages in game, close the menu.
+2. Copy `captured_strings.json` to `es.json` (or your language code).
+3. Translate the right-hand values only. Keep left-hand keys and any `%` codes exact.
+4. Ship under `Data/F4SE/Plugins/<Mod Name>/Languages/`.
 
-### Path A: Native ImGui menu (`AddSectionItem`)
+The rest of this section is for **plugin authors**. Do not edit `F4SEMenuFrameworkStrings.json` (framework UI only).
 
-Ship a JSON (or similar) file next to your DLL under `Data/F4SE/Plugins/`, resolve that path with `GetModuleHandleExW` + `GetModuleFileNameW` on an address inside your module (not the F4SE log directory), load it at startup, and look up keys when you draw.
+### Automatic translation (default; usually enough)
 
-**Recommended layout** (matches how other plugins in this workspace do it):
+Any text your plugin draws through the framework's ImGui exports (labels, titles, tooltips, combos, format strings, nav page titles) can be overridden by a community language file with **no code changes**. Folder:
 
 ```
-Data/F4SE/Plugins/MyPlugin.dll
-Data/F4SE/Plugins/MyPlugin/Languages/en.json
-Data/F4SE/Plugins/MyPlugin/Languages/es.json
-Data/F4SE/Plugins/MyPlugin/Languages/de.json
+Data/F4SE/Plugins/<SetSection name>/Languages/<lang>.json
 ```
 
-**English file example** (`en.json`):
+If the plugin never calls `SetSection`, the folder name is the DLL name without `.dll`. Keys are the exact English strings shown in the UI. Format strings are only substituted when the translation keeps the same `%` codes; a bad line falls back to English instead of crashing. Toggle: `[Localization] AutoTranslate` (default `true`).
 
-```json
-{
-  "Window.Title": "My Mod Settings",
-  "Option.Enable": "Enable feature",
-  "Option.Enable.Help": "Turns the feature on or off.",
-  "Button.Reset": "Reset to defaults"
-}
-```
+### Optional: `Translate()` API (Path A)
 
-**Usage in your render callback:**
+Use this when you want ID-style keys (`"Option.Enable"`) or strings you build outside ImGui. Same folder layout as above.
 
 ```cpp
-// Load once at plugin init (or the first time the menu opens).
-// Prefer UTF-8 JSON. Keep English as the fallback when a key is missing
-// in the active language file.
-ImGuiMCP::Text("%s", Loc("Window.Title"));
-if (ImGuiMCP::Checkbox(Loc("Option.Enable"), &enabled)) { /* ... */ }
-if (ImGuiMCP::IsItemHovered()) {
-    ImGuiMCP::SetTooltip("%s", Loc("Option.Enable.Help"));
-}
+F4SEMenuFramework::SetSection("MyPlugin");
+F4SEMenuFramework::AddSectionItem("Settings", [] {
+    using namespace F4SEMenuFramework;
+    ImGuiMCP::Text("%s", Translate("Window.Title"));
+    if (ImGuiMCP::Checkbox(Translate("Option.Enable"), &enabled)) { /* ... */ }
+});
 ```
 
-**Choosing the language file.** Read the player's `sLanguage` the same way the game and MCM do:
+Lookup order: active language file, then `en.json`, then the key itself. That last step means `en.json` is optional if you use English text as keys (`Translate("Enable feature")`). Returned pointers are stable for the session. On an older framework DLL, `Translate()` returns the key unchanged.
 
-1. `Documents\My Games\Fallout4\Fallout4Custom.ini` → `[General] sLanguage=`
-2. Else `Fallout4.ini` in the same folder
-3. Else default to `en`
+```cpp
+const char* Translate(const char* key);
+const char* Translate(const char* pluginName, const char* key);
+int  LoadTranslations(const char* pluginName = nullptr);   // -1 = no files (fine)
+void ReloadTranslations(const char* pluginName = nullptr);
+const char* GetGameLanguage();                             // "en", "es", ...
+```
 
-Common codes: `en`, `de`, `es`, `fr`, `it`, `ja`, `ko`, `pl`, `ptbr`, `ru`, `zh`. Map the code to your filename (`es` → `es.json`). If that file is missing, fall back to English.
+To generate `en.json` from source: `tools/extract_translations.bat <srcDir> <path\to\en.json>`. Plugins that must work without the framework can still load their own JSON; see True See Through Scopes (`src/UI/Localization/`).
 
-**Practical tips:**
+### MCM packages (Path B)
 
-- Store looked-up strings (or keep the JSON tree alive) so `Loc()` can return a stable `const char*` for ImGui. Do not return a temporary `std::string` by address.
-- Keep keys stable across releases (`Option.Enable`). Translate the values, not the keys.
-- Ship English with the mod. Other languages can be community files dropped into the same folder.
-- Put language files under your plugin's subfolder (`MyPlugin/Languages/`), not loose in `Plugins/`, so they stay with your assets.
-
-A worked example of a full language manager lives in True See Through Scopes (`src/UI/Localization/`), including per-language JSON files and English fallback.
-
-### Path B: MCM package hosted by the translation layer
-
-If your menu is a normal MCM `config.json` (hosted under **MCM Mod Configs (Legacy)**), use MCM's own translation files. No C++ required.
-
-**Layout:**
+If your menu is a normal MCM `config.json` under **MCM Mod Configs (Legacy)**, use MCM translation files. No C++ required.
 
 ```
 Data/MCM/Config/MyMod/config.json
 Data/MCM/Config/MyMod/Translation/Translate_en.txt
 Data/MCM/Config/MyMod/Translation/Translate_es.txt
-Data/MCM/Config/MyMod/Translation/Translate_de.txt
 ```
 
-**In `config.json`, use `$` keys for display strings:**
-
-```json
-{
-  "modName": "MyMod",
-  "displayName": "$MyMod_DisplayName",
-  "content": [
-    {
-      "text": "$MyMod_Enable",
-      "type": "switcher",
-      "id": "bEnable:Main",
-      "help": "$MyMod_Enable_Help",
-      "valueOptions": { "sourceType": "ModSettingBool" }
-    }
-  ]
-}
-```
-
-**In `Translate_en.txt` (tab-separated `$Key` then value):**
+In `config.json`, use `$` keys (`"text": "$MyMod_Enable"`). In `Translate_en.txt`, tab-separated lines:
 
 ```
-$MyMod_DisplayName	My Mod
 $MyMod_Enable	Enable feature
-$MyMod_Enable_Help	Turns the feature on or off.
 ```
 
-Rules the framework's MCM layer follows (same as real MCM):
-
-- Lines must start with `$` and contain a tab between key and value. Other lines are skipped.
-- Load order: English / unsuffixed files first, then the active language's `Translate_<lang>.txt` overrides per key.
-- Active language comes from the player's `sLanguage` (Custom.ini first, then Fallout4.ini).
-- Values may use `\n` / `\t` escapes and `{newline}` for line breaks. HTML / Scaleform tags such as `<font ...>` are stripped for ImGui display.
-- Some mods also ship `Data/Interface/Translations/<ModName>_<lang>.txt`; the layer probes those naming conventions as well.
-
-### What not to do
-
-- Do not edit or depend on `F4SEMenuFrameworkStrings.json` for your mod's strings. That file is owned by the framework and can change between versions.
-- Do not put shipping string tables under the F4SE log directory (`Documents\...\F4SE\`). Config and language files belong next to your DLL under `Data/F4SE/Plugins/`.
-- Do not hardcode only one language if you expect community translations: a simple key lookup plus an `en` fallback is enough for others to add files.
+English / unsuffixed files load first; `Translate_<lang>.txt` overrides per key. Language comes from `sLanguage`. Values may use `\n` / `\t` / `{newline}`; Scaleform tags like `<font ...>` are stripped for ImGui. The layer also probes `Data/Interface/Translations/<ModName>_<lang>.txt` naming.
 
 ---
 

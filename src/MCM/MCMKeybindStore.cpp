@@ -286,6 +286,18 @@ namespace MCMKeybindStore {
         return std::nullopt;
     }
 
+    std::optional<std::pair<int, int>> GetSavedRaw(const std::string& modName, const std::string& keybindId) {
+        std::lock_guard lock(s_mutex);
+        if (!s_loaded) return std::nullopt;
+
+        for (const auto& e : s_entries) {
+            if (e.modName == modName && e.id == keybindId) {
+                return std::make_pair(e.keycode, e.modifiers);
+            }
+        }
+        return std::nullopt;
+    }
+
     void RegisterMapping(const std::string& hotkeyId, const std::string& modName, const std::string& keybindId) {
         std::lock_guard lock(s_mutex);
         s_mappings[hotkeyId] = { modName, keybindId };

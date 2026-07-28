@@ -15,6 +15,7 @@
 #include "GamepadGlyphs.h"
 #include "MCM/MCMWidgetRenderer.h"
 #include "MCM/MCMConflictCheck.h"
+#include "AutoTranslate.h"
 #include <cctype>
 
 // --- Search state ---
@@ -99,6 +100,20 @@ static bool SubtreeMatches(const std::string& name, UI::MenuTree* node) {
     return false;
 }
 
+// The plugin render callback that "owns" a tree node, for auto-translating
+// its nav title: the node's own page callback, or the first descendant
+// page's. Group headers (mod names) resolve through their first page.
+static void* NodeOwnerFn(UI::MenuTree* node) {
+    if (node->Render) return reinterpret_cast<void*>(node->Render);
+    for (auto& child : node->SortedChildren) {
+        if (void* fn = NodeOwnerFn(child.second)) return fn;
+    }
+    for (auto& child : node->Children) {
+        if (void* fn = NodeOwnerFn(child.second)) return fn;
+    }
+    return nullptr;
+}
+
 void DummyRenderer(std::pair<const std::string, UI::MenuTree*>& node) {
     ++node_id;
     for (auto& item : node.second->Children) {
@@ -145,7 +160,12 @@ void RenderNode(std::pair<const std::string, UI::MenuTree*>& node, bool ancestor
     if (filterActive && descendantMatch && node.second->Children.size() != 0) {
         ImGui::SetNextItemOpen(true);
     }
-    bool node_open = ImGui::TreeNodeEx((void*)(intptr_t)node_id, node_flags, node.first.c_str(), node_id);
+    // The pointer-ID TreeNodeEx overload hashes the ID from node_id, not the
+    // text, so swapping in a translated title is identity-safe. Passing the
+    // title through "%s" (instead of as the format string itself) also keeps
+    // a '%' in a mod's page name from being interpreted by printf.
+    const char* navTitle = AutoTranslate::NodeTitle(NodeOwnerFn(node.second), node.first.c_str());
+    bool node_open = ImGui::TreeNodeEx((void*)(intptr_t)node_id, node_flags, "%s", navTitle);
 
 
     bool itemClicked = ImGui::IsItemClicked();
@@ -259,12 +279,14 @@ void __stdcall UI::RenderMenuWindow() {
     // Header section
     ImGui::BeginChild("F4SEModControlPanelModMenuHeader", ImVec2(0, headerHeight), ImGuiChildFlags_None);
     if (display_node) {
+        const char* pageTitle = AutoTranslate::NodeTitle(
+            reinterpret_cast<void*>(display_node->Render), display_node->Title.c_str());
         auto windowWidth = ImGui::GetWindowSize().x;
-        auto textWidth = ImGui::CalcTextSize(display_node->Title.c_str()).x;
+        auto textWidth = ImGui::CalcTextSize(pageTitle).x;
         float offsetX = (windowWidth - textWidth) * 0.5f;
         ImGui::SetCursorPosX(offsetX);
         ImGui::SetCursorPosY(headerOffsetY);
-        ImGui::Text("%s", display_node->Title.c_str());
+        ImGui::Text("%s", pageTitle);
     }
     ImGui::EndChild();
 
@@ -427,7 +449,12 @@ void __stdcall UI::RenderMenuWindow() {
             MCMWidgetRenderer::SetPageSearchFilter("");
         }
 
-        display_node->Render();
+        {
+            // Third-party page: translate the strings it draws (no-op for
+            // framework-internal pages like the MCM layer).
+            AutoTranslate::Scope autoLoc(reinterpret_cast<void*>(display_node->Render));
+            display_node->Render();
+        }
     }
     ImGui::EndChild();
 

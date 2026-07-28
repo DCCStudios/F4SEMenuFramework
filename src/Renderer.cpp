@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include "WindowManager.h"
+#include "AutoTranslate.h"
 #include "Config.h"
 #include "Input.h"
 #include "imgui_impl_dx11.h"
@@ -55,6 +56,9 @@ bool UI::Renderer::ProcessOpenClose(RE::InputEvent* const* evns) {
 void UI::Renderer::RenderWindows() {
     for (const auto window : WindowManager::Windows) {
         if (window->Interface->IsOpen) {
+            // Auto-translate text drawn by third-party plugin windows
+            // (no-op for the framework's own windows).
+            AutoTranslate::Scope autoLoc(reinterpret_cast<void*>(window->Render));
             window->Render();
         }
     }

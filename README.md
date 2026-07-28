@@ -13,6 +13,7 @@ Any F4SE plugin can register menu pages, popout windows, HUD overlays, input cal
 | You are… | Start here |
 |----------|------------|
 | A **player** installing the mod | [For players](#for-players) |
+| A **translator** making a language pack for a plugin | [LANGUAGE_PACKS.md](LANGUAGE_PACKS.md) |
 | An **MCM mod author** (JSON / Papyrus only) | [MCM translation layer](#mcm-translation-layer), usually nothing to change |
 | An **F4SE plugin author** (C++) | [Quick start](#quick-start-f4se-plugin-authors) → [Usage.md](Usage.md) → [PLUGIN_DEVELOPMENT_GUIDE.md](PLUGIN_DEVELOPMENT_GUIDE.md) |
 

@@ -246,6 +246,25 @@ F4SEMenuFramework::Hotkeys::Unregister(handle);
 
 ---
 
+## Plugin localization
+
+**Making a language pack for someone else's mod?** Use the beginner guide: [LANGUAGE_PACKS.md](LANGUAGE_PACKS.md). Capture strings in game, fill in `es.json` (or your language), ship it under `Data/F4SE/Plugins/<Mod Name>/Languages/`. No coding.
+
+**As a plugin author**, you usually do nothing: the framework auto-translates ImGui text your menu draws. Optional C++ API if you want ID-style keys:
+
+```cpp
+F4SEMenuFramework::SetSection("MyPlugin");
+F4SEMenuFramework::AddSectionItem("Settings", [] {
+    using namespace F4SEMenuFramework;
+    ImGuiMCP::Text("%s", Translate("Window.Title"));
+    if (ImGuiMCP::Checkbox(Translate("Option.Enable"), &enabled)) { /* ... */ }
+});
+```
+
+Files go next to your DLL: `Data/F4SE/Plugins/MyPlugin/Languages/<lang>.json`. Lookup order: active language, then `en.json`, then the key itself (`en.json` optional if keys are English text). Helpers: `LoadTranslations()`, `ReloadTranslations()`, `GetGameLanguage()`. Source scanner: `tools/extract_translations.bat <srcDir> <en.json>`. Full author notes: [PLUGIN_DEVELOPMENT_GUIDE.md](PLUGIN_DEVELOPMENT_GUIDE.md) section 12.
+
+---
+
 ## MCM translation layer
 
 You usually **do not** call a C++ “MCM API” from your F4SE plugin for this. The framework scans disk and builds pages itself. This section explains how that interacts with your mod.

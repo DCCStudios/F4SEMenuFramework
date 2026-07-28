@@ -7,12 +7,17 @@
 #include "UI.h"
 #include "TextureLoader.h"
 #include "GamepadInput.h"
+#include "PluginLocalization.h"
+#include "AutoTranslate.h"
 
-#define MENU_FRAMEWORK_VERSION 3.8f
+#define MENU_FRAMEWORK_VERSION 3.9f
 
 void AddSectionItem(const char* path, RenderFunction rendererFunction) { 
     auto pathSplit = SplitString(path, '/');
     AddToTree(UI::RootMenu, pathSplit, rendererFunction, pathSplit.back());
+    // The first path segment is the plugin's SetSection() name; record it as
+    // the module's translation folder for automatic backend translation.
+    AutoTranslate::NoteSectionPath(reinterpret_cast<void*>(rendererFunction), path);
 }
 
 WindowInterface* AddWindow(RenderFunction rendererFunction) { 
@@ -139,4 +144,37 @@ int64_t RegisterGamepadHotkey(const char* id, unsigned int defaultConfigCode, Ho
 
 bool IsControllerConnected() {
     return GamepadInput::IsControllerConnected();
+}
+
+// --- Plugin Localization API ---
+
+const char* GetPluginTranslation(const char* pluginName, const char* key) {
+    if (!key) return "";
+    if (!pluginName || !*pluginName) return key;
+    return PluginLocalization::Get(pluginName, key);
+}
+
+int LoadPluginTranslations(const char* pluginName) {
+    if (!pluginName || !*pluginName) return -1;
+    const int count = PluginLocalization::Load(pluginName);
+    if (count >= 0) {
+        logger::info("PluginLocalization: '{}' loaded {} key(s) (language '{}')",
+                     pluginName, count, PluginLocalization::GetLanguage());
+    } else {
+        // Informational: plugins using English text as keys ship no files.
+        logger::info("PluginLocalization: '{}' has no Languages files; keys pass through as-is",
+                     pluginName);
+    }
+    return count;
+}
+
+void ReloadPluginTranslations(const char* pluginName) {
+    if (!pluginName || !*pluginName) return;
+    PluginLocalization::Reset(pluginName);
+    logger::info("PluginLocalization: '{}' tables dropped; next lookup re-reads from disk",
+                 pluginName);
+}
+
+const char* GetGameLanguage() {
+    return PluginLocalization::GetLanguage().c_str();
 }
