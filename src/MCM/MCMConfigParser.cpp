@@ -424,6 +424,15 @@ namespace MCMConfigParser {
         MCMModConfig config;
         config.modName = modName;
 
+        // The config's own modName (MCM Categorizer keys category membership
+        // on this, which can differ from the folder name).
+        if (root.contains("modName") && root["modName"].is_string()) {
+            config.configModName = root["modName"].get<std::string>();
+        }
+        if (config.configModName.empty()) {
+            config.configModName = modName;
+        }
+
         // Display name (fall back to folder name)
         if (root.contains("displayName") && root["displayName"].is_string()) {
             config.displayName = root["displayName"].get<std::string>();

@@ -205,6 +205,11 @@ namespace MCMRegistry {
             }
         }
 
+        // Step 5b: Insert all registered pages into the framework nav tree.
+        // Deferred until after the loop because MCM Categorizer grouping
+        // needs the complete mod catalog to place category folders.
+        MCMWidgetRenderer::BuildSectionTree();
+
         s_active = (s_loadedModCount > 0);
         logger::info("[MCMRegistry] MCM compat initialized: {} mod(s) loaded successfully", s_loadedModCount);
 

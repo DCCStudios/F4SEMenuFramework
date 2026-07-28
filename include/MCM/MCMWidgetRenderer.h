@@ -8,9 +8,21 @@
 // Each MCM mod gets one or more section items registered with the framework.
 namespace MCMWidgetRenderer {
 
-    // Creates render functions for a parsed MCM mod config and registers them
-    // as framework section items under "MCM Mod Configs (Legacy)/<DisplayName>".
+    // Creates render functions for a parsed MCM mod config. The nav-tree
+    // section items are added by BuildSectionTree() once ALL mods are
+    // registered (MCM Categorizer grouping needs the full catalog first).
     void RegisterMod(const MCMConfigParser::MCMModConfig& config, const std::string& modName);
+
+    // Inserts every registered page into the framework nav tree under
+    // "MCM Mod Configs (Legacy)", grouped into category folders and ordered
+    // per MCM Categorizer's data when that mod is installed and enabled.
+    // Called by MCMRegistry after the registration loop.
+    void BuildSectionTree();
+
+    // Requests a rebuild of the "MCM Mod Configs (Legacy)" subtree at the end
+    // of the current frame (category edits / style changes regroup the list
+    // live). Safe to call from render callbacks.
+    void QueueSectionTreeRebuild();
 
     // Unregisters all section items for a mod (not typically needed at runtime).
     void UnregisterMod(const std::string& modName);

@@ -185,6 +185,9 @@ namespace MCMConfigParser {
     // The fully parsed config for one MCM mod
     struct MCMModConfig {
         std::string modName;          // folder/identifier name
+        std::string configModName;    // config.json's own "modName" (falls back to folder
+                                      // name) — MCM Categorizer's category membership
+                                      // lists use THIS name, not the folder name
         std::string displayName;      // human-readable name from config
         std::vector<MCMPage> pages;   // empty vector = single-page mod
 

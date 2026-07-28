@@ -15,6 +15,7 @@
 #include "GamepadGlyphs.h"
 #include "MCM/MCMWidgetRenderer.h"
 #include "MCM/MCMConflictCheck.h"
+#include "MCM/MCMCategorizerPage.h"  // category-folder styling in the nav tree
 #include "AutoTranslate.h"
 #include <cctype>
 
@@ -155,6 +156,21 @@ void RenderNode(std::pair<const std::string, UI::MenuTree*>& node, bool ancestor
     if (node.second->Children.size() == 0) {
         node_flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
     }
+
+    // Group nodes (children but no page of their own — mods with several
+    // pages, MCM Categorizer folders) expand on a single click anywhere on
+    // the row. OpenOnArrow stays only for nodes that are ALSO a page, where
+    // a label click must select the page rather than toggle the fold.
+    const bool isGroupOnly = node.second->Children.size() != 0 && !node.second->Render;
+    if (isGroupOnly) {
+        node_flags &= ~(ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick);
+    }
+
+    // MCM Categorizer folders get a distinct look: accent color, slightly
+    // larger text and a folder icon, so they read as containers of mods
+    // rather than as a mod with pages.
+    const bool isCategory = isGroupOnly && MCMCategorizerPage::IsCategoryNavLabel(node.first);
+
     // Auto-expand nodes that are only visible because something beneath them
     // matches, so search results are immediately reachable.
     if (filterActive && descendantMatch && node.second->Children.size() != 0) {
@@ -165,13 +181,44 @@ void RenderNode(std::pair<const std::string, UI::MenuTree*>& node, bool ancestor
     // title through "%s" (instead of as the format string itself) also keeps
     // a '%' in a mod's page name from being interpreted by printf.
     const char* navTitle = AutoTranslate::NodeTitle(NodeOwnerFn(node.second), node.first.c_str());
-    bool node_open = ImGui::TreeNodeEx((void*)(intptr_t)node_id, node_flags, "%s", navTitle);
-
-
-    bool itemClicked = ImGui::IsItemClicked();
-    bool itemToggledOpen = ImGui::IsItemToggledOpen();
+    bool node_open;
+    bool itemClicked, itemToggledOpen, itemIsFocused;
+    if (isCategory) {
+        // Accent derived from the theme text color (blended toward a warm
+        // gold, one step softer than the "MCM Mod Configs (Legacy)" header)
+        // so it tracks any loaded theme.
+        const ImVec4 base = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        const ImVec4 accent{
+            base.x * 0.50f + 1.00f * 0.50f,
+            base.y * 0.50f + 0.82f * 0.50f,
+            base.z * 0.50f + 0.35f * 0.50f,
+            base.w};
+        ImGui::PushStyleColor(ImGuiCol_Text, accent);
+        ImGui::SetWindowFontScale(1.1f);
+        // Empty label: the row's icon + title are drawn manually right after
+        // (a Font Awesome glyph can't be embedded in the tree label because
+        // the icon font is a separate atlas font). SpanAvailWidth in
+        // base_flags keeps the whole row clickable.
+        node_open = ImGui::TreeNodeEx((void*)(intptr_t)node_id, node_flags, "%s", "");
+        itemClicked = ImGui::IsItemClicked();
+        itemToggledOpen = ImGui::IsItemToggledOpen();
+        itemIsFocused = ImGui::IsItemFocused();
+        ImGui::SameLine(0.0f, 0.0f);
+        PushSolid();
+        // Folder icons (U+F07C open / U+F07B closed), mirroring the fold state.
+        ImGui::TextUnformatted(node_open ? "\xEF\x81\xBC" : "\xEF\x81\xBB");
+        Pop();
+        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+        ImGui::TextUnformatted(navTitle);
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopStyleColor();
+    } else {
+        node_open = ImGui::TreeNodeEx((void*)(intptr_t)node_id, node_flags, "%s", navTitle);
+        itemClicked = ImGui::IsItemClicked();
+        itemToggledOpen = ImGui::IsItemToggledOpen();
+        itemIsFocused = ImGui::IsItemFocused();
+    }
     bool gamepadButtonPressed = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown);  // Typically A button
-    bool itemIsFocused = ImGui::IsItemFocused();  // Check if the item is focused/highlighted by gamepad navigation
 
     if ((itemClicked || (gamepadButtonPressed && itemIsFocused)) && !itemToggledOpen) {
         if (node.second->Render) {

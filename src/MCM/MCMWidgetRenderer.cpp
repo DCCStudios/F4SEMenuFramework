@@ -10,6 +10,7 @@
 #include "MCM/SWFVectorMovie.h"
 #include "MCM/FallUIHudEditor.h"
 #include "MCM/MCMSettingsManagerPage.h"
+#include "MCM/MCMCategorizerPage.h"
 #include "F4SEMenuFramework.h"
 #include "Application.h"
 #include "GamepadInput.h"
@@ -1182,6 +1183,11 @@ namespace MCMWidgetRenderer {
             // MCM Settings Manager is another full AS3 app in an "image"
             // control — replaced by a native recreation the same way.
             MCMSettingsManagerPage::RenderImageControl(ctrl.imageLibName, ctrl.imageClassName);
+        } else if (ctrl.type == "image" &&
+                   MCMCategorizerPage::HandlesImageControl(ctrl.imageLibName, ctrl.imageClassName)) {
+            // MCM Categorizer's drag-and-drop category editor — replaced by
+            // a native recreation (grouping applies to our nav tree too).
+            MCMCategorizerPage::RenderImageControl(ctrl.imageLibName, ctrl.imageClassName);
         } else if (ctrl.type == "image" && IsInvisibleShimImage(ctrl.imageClassName)) {
             // Intentionally rendered as nothing — see IsInvisibleShimImage.
         } else if (ctrl.type == "image" && IsIntroBackdropImage(ctrl.imageClassName)) {
@@ -1596,28 +1602,110 @@ namespace MCMWidgetRenderer {
                 logger::warn("[MCMWidgetRenderer] Maximum page slots ({}) exhausted", MAX_MCM_PAGES);
                 break;
             }
-
-            const auto& page = config.pages[i];
-            // Grouped under "MCM Mod Configs (Legacy)" in the F4SE Menu Framework tree.
-            // The tree renderer gives this category a distinct accent color so
-            // translated MCM menus are visually separate from native pages.
-            std::string path;
-            if (config.pages.size() == 1) {
-                path = "MCM Mod Configs (Legacy)/" + config.displayName;
-            } else {
-                path = "MCM Mod Configs (Legacy)/" + config.displayName + "/" + page.pageDisplayName;
-            }
-
+            // Slot allocation only — the nav-tree items are added by
+            // BuildSectionTree() once every mod is registered, because MCM
+            // Categorizer grouping needs the complete mod catalog.
             size_t slot = s_nextPageSlot++;
             s_pageSlots[slot].modName = modName;
             s_pageSlots[slot].pageIdx = i;
-
-            AddSectionItem(path.c_str(), s_pageThunks[slot]);
-            logger::debug("[MCMWidgetRenderer] Registered page '{}' (slot {})", path, slot);
         }
 
         logger::info("[MCMWidgetRenderer] Registered mod '{}' with {} page(s)",
             config.displayName, config.pages.size());
+    }
+
+    // Root nav node all translated MCM pages live under. The tree renderer
+    // gives this category a distinct accent color so translated MCM menus
+    // are visually separate from native pages.
+    static constexpr const char* kLegacyRoot = "MCM Mod Configs (Legacy)";
+
+    void BuildSectionTree() {
+        // Feed the categorizer the full catalog (folder / config modName /
+        // translated display name per mod).
+        {
+            std::vector<MCMCategorizerPage::ModCatalogEntry> catalog;
+            catalog.reserve(s_contexts.size());
+            for (const auto& [name, ctx] : s_contexts) {
+                if (!ctx) continue;
+                catalog.push_back({ name, ctx->config.configModName, ctx->config.displayName });
+            }
+            MCMCategorizerPage::SetCatalog(std::move(catalog));
+        }
+
+        const bool categorized = MCMCategorizerPage::CategorizationActive();
+
+        // Page slots in registration order; with the categorizer active they
+        // are stably sorted by the user's order (category members carry
+        // their category's block position, unlisted mods stay at the end in
+        // registration order — matching the Flash app's main list).
+        std::vector<size_t> slots;
+        slots.reserve(s_nextPageSlot);
+        for (size_t i = 0; i < s_nextPageSlot && i < MAX_MCM_PAGES; ++i) {
+            slots.push_back(i);
+        }
+        if (categorized) {
+            std::stable_sort(slots.begin(), slots.end(), [](size_t a, size_t b) {
+                return MCMCategorizerPage::OrderIndexFor(s_pageSlots[a].modName) <
+                       MCMCategorizerPage::OrderIndexFor(s_pageSlots[b].modName);
+            });
+        }
+
+        size_t added = 0;
+        for (size_t slot : slots) {
+            const auto ctxIt = s_contexts.find(s_pageSlots[slot].modName);
+            if (ctxIt == s_contexts.end() || !ctxIt->second) continue;
+            const auto& config = ctxIt->second->config;
+            const size_t pageIdx = s_pageSlots[slot].pageIdx;
+            if (pageIdx >= config.pages.size()) continue;
+
+            std::string path{ kLegacyRoot };
+            if (categorized) {
+                const std::string cat =
+                    MCMCategorizerPage::CategoryLabelFor(config.configModName);
+                if (!cat.empty()) {
+                    path += "/" + cat;
+                }
+            }
+            path += "/" + config.displayName;
+            if (config.pages.size() > 1) {
+                path += "/" + config.pages[pageIdx].pageDisplayName;
+            }
+
+            AddSectionItem(path.c_str(), s_pageThunks[slot]);
+            ++added;
+            logger::debug("[MCMWidgetRenderer] Nav item '{}' (slot {})", path, slot);
+        }
+        logger::info("[MCMWidgetRenderer] Section tree built: {} page item(s){}",
+                     added, categorized ? " (MCM Categorizer grouping applied)" : "");
+    }
+
+    // --- Live rebuild (category edits regroup the nav tree in-game) ---
+
+    static bool s_treeRebuildQueued = false;
+
+    void QueueSectionTreeRebuild() {
+        s_treeRebuildQueued = true;
+    }
+
+    static void ProcessQueuedTreeRebuild() {
+        if (!s_treeRebuildQueued) return;
+        s_treeRebuildQueued = false;
+
+        auto it = UI::RootMenu->Children.find(kLegacyRoot);
+        if (it == UI::RootMenu->Children.end() || !it->second) {
+            return;  // nothing was ever registered
+        }
+        // Detach the old subtree WITHOUT deleting its nodes: UI keeps a raw
+        // pointer to the currently displayed node (display_node), which may
+        // point into this subtree — e.g. the categorizer's own page while
+        // the user edits categories. The handful of leaked nodes per rebuild
+        // (a rare, user-triggered action) buys guaranteed pointer safety;
+        // the detached node keeps rendering through its still-valid thunk.
+        it->second->Children.clear();
+        it->second->SortedChildren.clear();
+
+        BuildSectionTree();
+        logger::info("[MCMWidgetRenderer] Nav tree regrouped (MCM Categorizer change)");
     }
 
     void UnregisterMod(const std::string& modName) {
@@ -1640,6 +1728,7 @@ namespace MCMWidgetRenderer {
         // profiles, global settings) — drop it so it re-reads the INIs too.
         FallUIHudEditor::ResetSession();
         MCMSettingsManagerPage::ResetSession();
+        MCMCategorizerPage::ResetSession();
         logger::debug("[MCMWidgetRenderer] All control states invalidated (RefreshMenu)");
     }
 
@@ -1662,6 +1751,13 @@ namespace MCMWidgetRenderer {
                 // the FallUI editor session so reopening reloads from the INIs.
                 FallUIHudEditor::ResetSession();
                 MCMSettingsManagerPage::ResetSession();
+                // Leaving the categorizer's own page: its style switchers
+                // (enable/wrap) are plain translated controls we don't
+                // otherwise observe — regroup the nav tree if they changed.
+                if (s_currentOpenMod == "MCMCategorizer" &&
+                    MCMCategorizerPage::NavDataChanged()) {
+                    QueueSectionTreeRebuild();
+                }
             }
             // Legacy OnMCMClose fires when the user leaves MCM entirely (menu
             // closed or navigated to a non-MCM page). Native mods hang their
@@ -1689,6 +1785,10 @@ namespace MCMWidgetRenderer {
             s_currentOpenMod = s_renderedModThisFrame;
         }
         s_renderedModThisFrame.clear();
+
+        // Category edits queue a nav-tree regroup; apply it now, when no
+        // tree node is being iterated.
+        ProcessQueuedTreeRebuild();
 
         // Help text is re-collected every frame by the hovered/focused control.
         // The hint bar reads it during the frame (it renders after the page
