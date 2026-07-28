@@ -63,6 +63,11 @@ namespace MCMValueProvider {
     // dispatches again (used by RefreshMenu and menu re-open).
     void InvalidateAsyncPropertyReads();
 
+    // Forget ONE finished read key so it can be re-dispatched immediately
+    // (used to retry a read that raced a queued property write). In-flight
+    // reads are left alone: their callback still needs the slot to land in.
+    void InvalidateAsyncPropertyRead(const std::string& requestKey);
+
     // Re-read every mod's layered settings INIs from disk, replacing the
     // in-memory cache. Used to pick up changes the *native* MCM wrote while
     // our menu was closed (it commits each edit to Data/MCM/Settings/<Mod>.ini

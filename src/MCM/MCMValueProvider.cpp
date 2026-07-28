@@ -690,6 +690,14 @@ namespace MCMValueProvider {
         std::erase_if(s_asyncReads, [](const auto& kv) { return kv.second.done; });
     }
 
+    void InvalidateAsyncPropertyRead(const std::string& requestKey) {
+        std::lock_guard lock(s_asyncMutex);
+        auto it = s_asyncReads.find(requestKey);
+        if (it != s_asyncReads.end() && it->second.done) {
+            s_asyncReads.erase(it);
+        }
+    }
+
     static ValueResult GetPropertyValue(const MCMConfigParser::ValueSource& source) {
         ValueResult result;
 

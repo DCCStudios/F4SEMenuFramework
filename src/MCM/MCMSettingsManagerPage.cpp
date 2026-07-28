@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -241,6 +242,18 @@ namespace MCMSettingsManagerPage {
         std::set<std::string> pendingProps;          // async reads in flight
         std::set<std::string> unavailable;
 
+        // Write confirmation for async property applies. SetPropertyValue is
+        // queued on the Papyrus VM thread, so a re-read dispatched right after
+        // an apply can return the PRE-write value; accepting that stale result
+        // would overwrite the optimistic cache and make the setting look
+        // unapplied (user had to click Apply twice). While an entry exists
+        // here, incoming read results that don't match the just-written value
+        // are discarded and the read is retried (bounded), keeping the
+        // optimistic value. When retries run out the live value wins (the
+        // mod's Set handler genuinely rejected or rewrote it).
+        struct PendingWrite { Value expected; int retriesLeft = 0; };
+        std::map<std::string, PendingWrite> expectedProps;
+
         std::array<SlotCache, kMaxSlots + 1> slots;  // index 1..10
         bool presetsLoaded = false;
         std::map<std::string, Value> presets;        // baseName -> stored tree
@@ -398,6 +411,8 @@ namespace MCMSettingsManagerPage {
                 while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
                 size_t b = line.find_first_not_of(" \t");
                 if (b == std::string::npos) continue;
+                // INI comments ('; exported presets ship with a header).
+                if (line[b] == ';' || line[b] == '#') continue;
                 if (line[b] == '[') {
                     inSection = line.find("[MCMSettings]", b) == b;
                     continue;
@@ -536,6 +551,19 @@ namespace MCMSettingsManagerPage {
         }
     }
 
+    // Equivalence at the setting's real precision (same rule as
+    // DifferentToStored): floats compare as float32 because every MCM float
+    // source is a 32-bit float; everything else uses AS3 loose equality.
+    static bool ValuesMatch(const ManagedSetting& ms, const Value& a, const Value& b) {
+        if (ms.IsFloatKind()) {
+            const double x = As3ToNumber(a);
+            const double y = As3ToNumber(b);
+            if (std::isnan(x) || std::isnan(y)) return std::isnan(x) == std::isnan(y);
+            return static_cast<float>(x) == static_cast<float>(y);
+        }
+        return LooseEq(a, b);
+    }
+
     static void BuildDatabase() {
         s.db.clear();
         s.dbByPath.clear();
@@ -545,6 +573,7 @@ namespace MCMSettingsManagerPage {
         s.current.clear();
         s.pendingProps.clear();
         s.unavailable.clear();
+        s.expectedProps.clear();
 
         // Control types with no persistable value (readMcmModSettings skip set).
         static const std::set<std::string> kSkipTypes = {
@@ -669,11 +698,36 @@ namespace MCMSettingsManagerPage {
             MCMValueProvider::ValueResult r;
             if (MCMValueProvider::TryTakePropertyResult(PropRequestKey(ms), r)) {
                 if (r.status == MCMValueProvider::ProviderStatus::Available) {
-                    s.current[pathString] = PropResultToValue(ms, r);
+                    Value v = PropResultToValue(ms, r);
+                    auto ex = s.expectedProps.find(pathString);
+                    if (ex != s.expectedProps.end()) {
+                        if (ValuesMatch(ms, ex->second.expected, v)) {
+                            // Write confirmed by the VM.
+                            s.expectedProps.erase(ex);
+                        } else if (--ex->second.retriesLeft > 0) {
+                            // Stale result: this read raced the queued
+                            // property write on the VM thread. Keep the
+                            // optimistic value and read again (each retry is
+                            // a full VM round trip, so this self-paces).
+                            MCMValueProvider::InvalidateAsyncPropertyRead(PropRequestKey(ms));
+                            MCMValueProvider::RequestPropertyRead(PropRequestKey(ms), ms.source);
+                            continue;  // stays in pendingProps
+                        } else {
+                            logger::warn("[MCMSettingsManager] '{}' still reads back a "
+                                         "different value after apply — the mod's Set "
+                                         "handler likely rejected or rewrote it; showing "
+                                         "the live value", pathString);
+                            s.expectedProps.erase(ex);
+                            s.current[pathString] = std::move(v);
+                        }
+                    } else {
+                        s.current[pathString] = std::move(v);
+                    }
                 } else {
                     // The AS3 drops unreadable settings from the DB entirely;
                     // we keep the row but exclude it from counts/compares.
                     s.unavailable.insert(pathString);
+                    s.expectedProps.erase(pathString);
                 }
                 done.push_back(pathString);
             }
@@ -725,8 +779,15 @@ namespace MCMSettingsManagerPage {
             double c = As3ToNumber(cur);
             double v = As3ToNumber(*leaf);
             if (std::isnan(c) != std::isnan(v)) return true;
-            double diff = std::abs(v - c);
-            return !std::isnan(diff) && diff > 1e-10;
+            if (std::isnan(c) && std::isnan(v)) return false;
+            // Compare at float32 precision: every MCM float source
+            // (ModSettingFloat / GlobalValue / PropertyValueFloat) is a
+            // 32-bit float, so live values arrive as float-widened doubles
+            // (1.2f -> 1.2000000476837158). A hand-authored preset that says
+            // 1.2 is indistinguishable from that in game and must not count
+            // as "changed" (the old 1e-10 tolerance was far below the ~5e-8
+            // float rounding noise and flagged false differences).
+            return static_cast<float>(c) != static_cast<float>(v);
         }
         return !LooseEq(cur, *leaf);
     }
@@ -813,6 +874,17 @@ namespace MCMSettingsManagerPage {
                     : ("VK " + std::to_string(vk));
                 return ModifierPrefix(mods) + name;
             }
+        }
+        if (ms.IsFloatKind() && v.IsNumber()) {
+            // Show the value at its real (float32) precision: live reads are
+            // float-widened doubles, so printing the double verbatim shows
+            // noise like 1.20000004768371 for what the game stores as 1.2.
+            // Round-trip through the float's shortest representation.
+            const float f = static_cast<float>(As3ToNumber(v));
+            char buf[32];
+            const auto res = std::to_chars(buf, buf + sizeof(buf), f);
+            return M8rIniJson::NumberToString(
+                std::strtod(std::string(buf, res.ptr).c_str(), nullptr));
         }
         return As3ToString(v);
     }
@@ -925,6 +997,14 @@ namespace MCMSettingsManagerPage {
         // Optimistic cache update (the AS3 sets mcmElmObj.value the same way);
         // property writes land asynchronously but are assumed to succeed.
         s.current[ms.pathString] = v;
+        if (ms.IsProperty()) {
+            // Guard the optimistic value against the read-after-write race:
+            // the refresh below re-reads properties, and a read that executes
+            // before the queued write would report the OLD value. ~10 retries
+            // is several seconds of VM round trips — far beyond any realistic
+            // queue depth.
+            s.expectedProps[ms.pathString] = Session::PendingWrite{ v, 10 };
+        }
         s.countsDirty = true;
         return true;
     }
@@ -937,7 +1017,17 @@ namespace MCMSettingsManagerPage {
         int changed = 0;
         for (const auto& ms : s.db) {
             if (!onlyGroupMod.empty() && ms.groupMod != onlyGroupMod) continue;
-            if (!HasStored(stored, ms) || !DifferentToStored(stored, ms)) continue;
+            if (!HasStored(stored, ms)) continue;
+            // DifferentToStored is false while a setting's current value is
+            // still unknown (async property read not yet delivered), which
+            // used to SKIP such settings entirely — clicking Apply shortly
+            // after opening the page left some values unapplied until a
+            // second click. A stored value can be written without knowing
+            // the current one, so apply unconditionally in that case (skip
+            // only settings that are confirmed unreadable).
+            const bool curKnown = s.current.count(ms.pathString) != 0;
+            if (curKnown && !DifferentToStored(stored, ms)) continue;
+            if (!curKnown && s.unavailable.count(ms.pathString)) continue;
             const Value* leaf = StoredLeaf(stored, ms);
             if (leaf && ApplyValue(ms, *leaf)) ++changed;
         }
