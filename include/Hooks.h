@@ -67,4 +67,29 @@ namespace Hooks {
         static void install();
     };
 
+    // Dispatches the game's input-event queue to plugin callbacks registered
+    // through AddInputEvent (export RegisterInpoutEvent) — the hook that makes
+    // InputEventHandler::Process actually run.
+    //
+    // Two receivers are hooked because no single one carries every device in
+    // every state (verified in game): the BSInputEventReceiver embedded in
+    // PlayerCamera (+0x38) has keyboard in all states but loses the mouse wheel
+    // while the player is sighted; PlayerControls (receiver at its own base,
+    // offset 0 — the slot ScrollWheelWeaponSelect hooks) has the mouse/gamepad
+    // in all states but no keyboard. We dispatch keyboard from the camera
+    // receiver and mouse+gamepad from the controls receiver, so every event is
+    // delivered exactly once regardless of ADS state. Both are chain-friendly
+    // vtable-slot-0 hooks (save previous, forward), composing with MagnaScope /
+    // UneducatedShooter / ScrollWheelWeaponSelect in install order. No Address
+    // Library ID, so it works on every runtime.
+    struct InputQueueHook {
+        // PlayerCamera+0x38 receiver — dispatches keyboard (and any non-pointer).
+        static void __fastcall cameraThunk(RE::BSInputEventReceiver* receiver, RE::InputEvent* queueHead);
+        static inline void (*cameraOriginal)(RE::BSInputEventReceiver*, RE::InputEvent*) = nullptr;
+        // PlayerControls receiver — dispatches mouse + gamepad.
+        static void __fastcall controlsThunk(RE::BSInputEventReceiver* receiver, RE::InputEvent* queueHead);
+        static inline void (*controlsOriginal)(RE::BSInputEventReceiver*, RE::InputEvent*) = nullptr;
+        static void install();
+    };
+
 }

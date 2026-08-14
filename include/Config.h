@@ -32,6 +32,18 @@ class Config {
     // 0 = Xbox (default), 1 = PlayStation.
     static int GamepadGlyphStyle;
 
+    // Gamepad UX: while a controller is connected and the menu is open,
+    // swallow keyboard input so stray key events (Steam Input emulation,
+    // remote play, a bumped keyboard) can't fight controller navigation.
+    // Keybind capture still reads the keyboard (it polls GetAsyncKeyState
+    // directly), and the menu toggle key / ESC-to-close stay active.
+    static bool DisableKeyboardWithGamepad;
+
+    // Where the "F4SE FRAMEWORK" row is inserted in the pause menu list.
+    // 0 = top (default), 1..N = that many rows down, -1 = bottom.
+    // Applied the next time the pause menu opens.
+    static int PauseMenuButtonPos;
+
     // Automatic backend translation of third-party plugin UI text
     // ([Localization] in the INI; see AutoTranslate.h).
     static bool AutoTranslatePlugins;

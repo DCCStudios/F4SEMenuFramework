@@ -131,6 +131,16 @@ namespace F4SE
 							trampoline.set_trampoline(mem, info.trampolineSize);
 						else
 							trampoline.create(info.trampolineSize);
+					} else {
+						// LOCAL PATCH (F4SE Menu Framework): upstream skips trampoline
+						// creation entirely when the F4SE trampoline interface is not
+						// served (old OG F4SE builds without kInterface_Trampoline, or
+						// F4SE's per-plugin hide-trampoline compat flag). That left the
+						// trampoline with zero capacity and the first write_call<5>
+						// aborted with "failed to handle allocation request. allocate
+						// size: 14 Free size: 0". Fall back to a locally allocated
+						// trampoline so the plugin is self-sufficient.
+						trampoline.create(info.trampolineSize);
 					}
 				});
 			}

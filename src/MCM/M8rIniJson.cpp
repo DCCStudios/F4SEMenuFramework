@@ -114,7 +114,16 @@ namespace M8rIniJson {
         }
     }
 
-    static void StringifyInto(const Value& v, std::string& out) {
+    // Recursion cap for both parse and stringify. The Settings Manager's own
+    // slot trees are ~5 levels deep; anything past this is corrupt or a
+    // maliciously/accidentally nested blob (e.g. the MCM Categorizer's data
+    // when the m8r save path produces pathological nesting). Bailing keeps
+    // this codec from being the thing that stack-overflows — matching the
+    // kMaxDepth guard M8rQckSer already has.
+    constexpr int kMaxDepth = 64;
+
+    static void StringifyInto(const Value& v, std::string& out, int depth = 0) {
+        if (depth > kMaxDepth) return;  // don't recurse into a degenerate tree
         switch (v.kind) {
             case Value::Kind::Null:
                 out += "null";
@@ -151,7 +160,7 @@ namespace M8rIniJson {
                     ReplaceAll(k, ":", kColonToken);
                     out += k;
                     out += ':';
-                    StringifyInto(child, out);
+                    StringifyInto(child, out, depth + 1);
                 }
                 out += '}';
                 break;
@@ -187,7 +196,7 @@ namespace M8rIniJson {
             }
         };
 
-        Value ParseObject(Cursor& c);   // fwd
+        Value ParseObject(Cursor& c, int depth);   // fwd
 
         // ^(-?\d+(?:\.\d+)?)(?=[,}\]]|$) — int when no '.', else Number.
         Value ParseNumber(Cursor& c) {
@@ -245,7 +254,7 @@ namespace M8rIniJson {
             return {};
         }
 
-        Value ParseElement(Cursor& c) {
+        Value ParseElement(Cursor& c, int depth) {
             const char ch = c.Peek();
             if (ch == '-' || (ch >= '0' && ch <= '9')) return ParseNumber(c);
             if (ch == '"') return ParseString(c);
@@ -256,7 +265,7 @@ namespace M8rIniJson {
                 c.failed = true;
                 return {};
             }
-            if (ch == '{') { ++c.pos; return ParseObject(c); }
+            if (ch == '{') { ++c.pos; return ParseObject(c, depth + 1); }
             if (ch == 'N' && c.ConsumeLiteral("NaN")) {
                 return Value::MakeDouble(std::nan(""));
             }
@@ -265,7 +274,8 @@ namespace M8rIniJson {
         }
 
         // Called with the cursor just past '{'.
-        Value ParseObject(Cursor& c) {
+        Value ParseObject(Cursor& c, int depth) {
+            if (depth > kMaxDepth) { c.failed = true; return {}; }  // degenerate nesting
             Value obj = Value::MakeObject();
             if (c.Consume('}')) return obj;
             while (!c.AtEnd()) {
@@ -277,7 +287,7 @@ namespace M8rIniJson {
                 ++c.pos;  // ':'
                 ReplaceAll(key, kColonToken, ":");
 
-                Value elem = ParseElement(c);
+                Value elem = ParseElement(c, depth);
                 if (c.failed) return {};
                 obj.object[std::move(key)] = std::move(elem);
 
@@ -296,7 +306,7 @@ namespace M8rIniJson {
         Cursor c{ text };
         if (text[0] == '{') {
             c.pos = 1;
-            Value v = ParseObject(c);
+            Value v = ParseObject(c, 0);
             if (c.failed) return std::nullopt;
             return v;
         }

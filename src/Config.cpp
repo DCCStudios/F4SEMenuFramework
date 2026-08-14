@@ -23,6 +23,8 @@ float Config::FontSizeBig = 64.0f;
 bool Config::MCMCompatEnabled = true;
 bool Config::MCMCompatWhenNativePresent = true;
 int Config::GamepadGlyphStyle = 0;
+bool Config::DisableKeyboardWithGamepad = false;
+int Config::PauseMenuButtonPos = 0;
 bool Config::AutoTranslatePlugins = true;
 bool Config::CaptureUIStrings = false;
 
@@ -43,6 +45,13 @@ void Config::Init() {
 
     FreezeTimeOnMenu = ini->GetBool("FreezeTimeOnMenu", true);
     BlurBackgroundOnMenu = ini->GetBool("BlurBackgroundOnMenu", true);
+
+    // Pause-menu row placement: 0 = top, 1..N = rows down, -1 = bottom.
+    // Clamp anything else back into that range so a hand-edited INI can't
+    // produce a nonsense splice index.
+    PauseMenuButtonPos = ini->GetInt("PauseMenuButtonPos", 0);
+    if (PauseMenuButtonPos < -1) PauseMenuButtonPos = -1;
+    if (PauseMenuButtonPos > 10) PauseMenuButtonPos = 10;
     auto menuStyleStr = Utils::toUpperCase(ini->GetString("MenuStyle", "skyrimDefault"));
 
     MenuStyles = Theme::GetJsonFiles();
@@ -86,6 +95,7 @@ void Config::Init() {
         std::transform(glyphStyle.begin(), glyphStyle.end(), glyphStyle.begin(), ::tolower);
         GamepadGlyphStyle = (glyphStyle == "playstation" || glyphStyle == "ps") ? 1 : 0;
     }
+    DisableKeyboardWithGamepad = ini->GetBool("DisableKeyboardInput", false);
 
     delete ini;
 }
@@ -104,6 +114,7 @@ void Config::Save() {
 
     ini->SetBool("FreezeTimeOnMenu", FreezeTimeOnMenu);
     ini->SetBool("BlurBackgroundOnMenu", BlurBackgroundOnMenu);
+    ini->SetInt("PauseMenuButtonPos", PauseMenuButtonPos);
 
 
     if (ToggleMode == 0) {
@@ -160,6 +171,7 @@ void Config::Save() {
     // Gamepad Section
     ini->SetSection("Gamepad");
     ini->SetString("GlyphStyle", GamepadGlyphStyle == 1 ? "playstation" : "xbox");
+    ini->SetBool("DisableKeyboardInput", DisableKeyboardWithGamepad);
 
     // Save to file
     if (!ini->Save()) {

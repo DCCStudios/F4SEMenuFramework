@@ -506,15 +506,22 @@ namespace GamepadInput {
         bool menuOpen = WindowManager::MainInterface && WindowManager::MainInterface->IsOpen.load();
         bool justPressed = IsToggleButtonJustPressed(toggleCode);
 
-        // If menu is open, any press of the toggle button closes it
-        if (menuOpen && justPressed) {
-            WindowManager::Close();
-            logger::debug("[GamepadInput] Toggle button — closing menu");
+        // The gamepad toggle button only OPENS the menu, never closes it.
+        // The default binding is D-pad Up, which is also an ImGui navigation
+        // button — closing on press meant navigating up the menu slammed it
+        // shut. Closing belongs to the B-button back cascade, Start, ESC,
+        // and the keyboard toggle key. Reset the hold/double-press trackers
+        // so a press consumed by the open menu can't carry state into the
+        // next closed-menu evaluation (e.g. a "second press" firing after
+        // the menu was closed with B).
+        if (menuOpen) {
+            s_holdActive = false;
+            s_waitingForSecondPress = false;
             return;
         }
 
         // Menu is closed — handle toggle modes
-        if (!menuOpen) {
+        {
             switch (toggleMode) {
                 case 0: // SinglePress
                     if (justPressed) {

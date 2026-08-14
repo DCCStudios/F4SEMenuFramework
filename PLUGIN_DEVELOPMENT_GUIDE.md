@@ -73,6 +73,7 @@ YourWorkspace/
     │   ├── logger.h
     │   ├── Plugin.h
     │   ├── F4SEMenuFramework.h    ← consumer header (copy from framework)
+    │   ├── DIK.h                  ← optional: named scan codes, only if you register hotkeys
     │   └── UI.h
     ├── src/
     │   ├── plugin.cpp
@@ -296,6 +297,12 @@ Change `"MyF4SEPlugin.log"` to match your plugin name.
 ## 3. The Consumer Header: F4SEMenuFramework.h
 
 Copy `F4SEMenuFramework.h` from the framework's `resources/` folder into your `include/` directory. This is the **only file you need** from the framework, you do NOT link against `F4SEMenuFramework.lib`.
+
+> **Optional second file — `DIK.h`.** Only worth copying if your plugin registers hotkeys. It provides named scan codes (`DIK::F1`, `GamepadCode::DpadUp`) so you can write `Hotkeys::Register("MyMod.Toggle", DIK::F1, &OnToggle)` instead of passing `0x3B`. It lives in `resources/` next to the consumer header, is header-only, and depends on nothing.
+>
+> `F4SEMenuFramework.h` picks it up automatically with `__has_include` — if you don't copy it, everything else in the header still compiles and works exactly as before. Nothing about the single-file workflow changes for plugins that don't use hotkeys.
+>
+> Keyboard values are DirectInput (`DIK_*`) scan codes as the game reports them, **not** Windows virtual-key codes: `VK_F1` (`0x70`) is wrong, F1 is `0x3B`. Extended keys carry bit `0x80`, so PageUp is `0xC9` rather than `0x49`.
 
 The header works via **runtime dynamic linking**: it resolves `F4SEMenuFramework.dll` with `GetModuleHandleW` on each `GetProcAddress` path and then `GetProcAddress(...)` for every ImGui function and framework API. This means:
 
@@ -739,7 +746,30 @@ void __stdcall MyOverlay::Render() {
 
 ## 9. Input Events
 
-Input event callbacks let your plugin intercept keyboard/gamepad input, even outside the Mod Control Panel. Use them to toggle custom windows with hotkeys.
+Input event callbacks let your plugin intercept keyboard/mouse/gamepad input, even outside the Mod Control Panel. Use them to toggle custom windows with hotkeys.
+
+**Where your callback runs (v3.4+):** the framework dispatches the game's raw
+`RE::InputEvent` queue from a hook on `PlayerControls` (the
+`BSInputEventReceiver::PerformInputProcessing` receiver), on the game's input
+thread — not the render thread. Keep callbacks fast, and don't call ImGui
+drawing functions from them.
+
+Consumption semantics, precisely:
+
+- Returning `true` **unlinks the event from the queue before it reaches the
+  game's player controls** — movement, combat, VATS, Pip-Boy activation and the
+  other gameplay handlers will not see it.
+- Game **UI menus may still receive the event**: Scaleform menus process input
+  through separate receivers whose dispatch order relative to `PlayerControls`
+  is not guaranteed.
+- Callbacks are **not invoked while a blocking framework window is open** (same
+  gate as the Hotkey API), so typing in a framework text field can't trigger
+  your gameplay callback underneath the menu.
+
+> Versions prior to 3.4 never dispatched these callbacks at all — the API
+> registered them but no hook invoked them. If your plugin worked around that
+> with its own `PerformInputProcessing` hook, both paths now fire; keep only
+> one.
 
 ```cpp
 void UI::Register() {
@@ -792,7 +822,9 @@ In CommonLibF4, input events are accessed via **direct member access**, not gett
 0x30 = B             0x31 = N             0x3D = F3
 ```
 
-Full list: search for "DirectInput keyboard scan codes" or DIK constants.
+Full list: `DIK.h` in the framework's `resources/` folder — the same optional
+header that gives the Hotkey API its named constants (`DIK::F1`,
+`GamepadCode::DpadUp`); `button->idCode` uses the identical code space.
 
 ### Device Types
 
@@ -841,21 +873,58 @@ if (F4SEMenuFramework::Hotkeys::HasConflict(0x43, "MyMod.ToggleOverlay")) {
 F4SEMenuFramework::Hotkeys::SetBinding("MyMod.ToggleOverlay", 0x43);
 ```
 
-If `SetBinding` targets a code already used by another registered hotkey, the framework shows a **confirmation dialog** and applies the change only if the user confirms. Unbind with `0` (never conflicts).
+If `SetBinding` targets a code already used by another registered hotkey **or by one of the player's own Fallout 4 controls** (Jump, Activate, …), the framework shows a **confirmation dialog** and applies the change only if the user confirms. Game-control clashes are listed with a `[Game]` prefix. Unbind with `0` (never conflicts).
 
 ```cpp
-int64_t handle = F4SEMenuFramework::Hotkeys::Register("MyMod.ToggleOverlay", 0x3C, OnToggleMyOverlay);
+int64_t handle = F4SEMenuFramework::Hotkeys::Register("MyMod.ToggleOverlay", DIK::F2, OnToggleMyOverlay);
 F4SEMenuFramework::Hotkeys::Unregister(handle);
 ```
+
+### Chord hotkeys (Ctrl / Shift / Alt)
+
+Require a modifier by using the `*WithModifiers` variants. `modifiers` is a
+bitmask of `HotkeyMod::Ctrl | Shift | Alt` (from `DIK.h`); `0` is identical to
+the plain functions.
+
+```cpp
+// Ctrl+Shift+F1 — keyboard
+F4SEMenuFramework::Hotkeys::RegisterWithModifiers(
+    "MyMod.Toggle", DIK::F1, HotkeyMod::Ctrl | HotkeyMod::Shift, &OnToggle);
+
+// Gamepad A while holding Alt on the keyboard
+F4SEMenuFramework::Hotkeys::RegisterGamepadWithModifiers(
+    "MyMod.Quick", GamepadCode::A, HotkeyMod::Alt, &OnQuick);
+
+unsigned int mods = F4SEMenuFramework::Hotkeys::GetModifiers("MyMod.Toggle");
+F4SEMenuFramework::Hotkeys::SetBindingWithModifiers("MyMod.Toggle", DIK::F1, HotkeyMod::Ctrl);
+```
+
+- A **modified** binding fires only when *exactly* those modifiers are held.
+- A **plain** binding (`modifiers == 0`) fires regardless of modifier state, so
+  adding a chord never changes the behavior of existing plain hotkeys — the two
+  are additive, and both can fire on the same key press if you bind both.
+- The modifiers are read from the physical keyboard Ctrl/Shift/Alt even for a
+  gamepad hotkey (that is what "gamepad + Alt" means above).
+- Chords persist as `CTRL+F1` in the INI; an unmodified bind still writes the
+  bare `F1`, so files from older versions load unchanged.
+- A chord never conflicts with an unmodified game control — `Shift+R` does not
+  clash with the game's `R`.
+- These are separate exports, so on a framework DLL too old to have them the
+  wrappers no-op (return -1 / false) while the plain functions keep working.
+
+> Note: `Alt`-based chords on some keys (notably `Alt+F4`) collide with OS/window
+> shortcuts that the game never sees; prefer Ctrl/Shift there.
 
 ### Rules of thumb
 
 | Topic | Behavior |
 |-------|----------|
-| Persistence | Names in INI (`F2`, `LB`, …), not raw integers |
+| Persistence | Names in INI (`F2`, `CTRL+F2`, `LB`, …), not raw integers |
 | When callbacks run | First press only; keyboard hotkeys suppressed while a **blocking** framework window is open |
-| Same id twice | Updates callback; returns existing handle |
+| Same id twice | Updates callback; returns existing handle (a *different* default logs a warning — ids must be unique) |
 | Same key, different ids | Allowed, every matching callback fires |
+| Wrong code passed | An unknown scan code logs a warning (usual cause: a Windows `VK_*` value instead of a DIK code) |
+| Conflicts checked against | Other framework hotkeys **and** the player's Fallout 4 controls (`kMainGameplay` context) |
 | Gamepad connected? | `F4SEMenuFramework::IsControllerConnected()` |
 
 Copy-paste tables and more examples: [Usage.md: Plugin Hotkey API](Usage.md#plugin-hotkey-api).

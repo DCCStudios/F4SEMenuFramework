@@ -102,12 +102,23 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f
             REX::FModule::IsRuntimeOG() ? "OG" :
             REX::FModule::IsRuntimeNG() ? "NG" : "AE";
         logger::info("Game runtime {} -> {} address slot", gameVer.string(), slot);
+        // F4SE version matters for diagnostics: builds without the trampoline
+        // interface (very old OG F4SE) exercise the local-trampoline fallback.
+        logger::info("F4SE version {}", a_f4se->F4SEVersion().string());
     }
 
     // log = false: SetupLog() above already installed our spdlog default
     // logger; CommonLib's REX layer logs through the same default logger.
     // trampoline = true replaces the old F4SE::AllocTrampoline(128).
     F4SE::Init(a_f4se, { .log = false, .trampoline = true, .trampolineSize = 128 });
+
+    // Sanity check: some users' F4SE builds do not serve the trampoline
+    // interface, in which case CommonLib (with our local patch) creates the
+    // trampoline itself. Log which path was taken so startup-crash reports
+    // ("allocate size: 14 Free size: 0") are diagnosable from the log alone.
+    logger::info("Trampoline source: {} ({} bytes free)",
+        F4SE::GetTrampolineInterface() ? "F4SE branch pool" : "local allocation",
+        REL::GetTrampoline().free_size());
 
     auto* messaging = F4SE::GetMessagingInterface();
     if (!messaging || !messaging->RegisterListener(MessageCallback)) {

@@ -32,6 +32,14 @@ WindowInterface* AddWindow(RenderFunction rendererFunction) {
 
 }
 
+void CloseMenu()
+{
+    // Reuse the framework's normal close transaction. This closes the main
+    // panel and blocking plugin windows, dispatches kCloseMenu, and flushes
+    // localization capture exactly as the framework hotkey and close button do.
+    WindowManager::Close();
+}
+
 void PushDefault() 
 {
     FontManager::currentFont = (Font)(FontManager::currentFont & ~Font::fontSizeBig);
@@ -138,6 +146,31 @@ bool HasHotkeyConflict(unsigned int scanCode, const char* excludeId) {
 
 int64_t RegisterGamepadHotkey(const char* id, unsigned int defaultConfigCode, HotkeyCallback callback) {
     return HotkeyManager::RegisterGamepad(id, defaultConfigCode, callback);
+}
+
+// --- Chord (Ctrl/Shift/Alt) variants ---
+// modifiers is a HotkeyMod bitmask (Ctrl=1, Shift=2, Alt=4); 0 == the plain
+// entry points above. Kept as separate exports (not overloads) so the existing
+// exported symbols are untouched and old plugins keep resolving them.
+
+int64_t RegisterHotkeyWithModifiers(const char* id, unsigned int defaultScanCode, unsigned int modifiers, HotkeyCallback callback) {
+    return HotkeyManager::RegisterWithModifiers(id, defaultScanCode, static_cast<uint8_t>(modifiers), callback);
+}
+
+int64_t RegisterGamepadHotkeyWithModifiers(const char* id, unsigned int defaultConfigCode, unsigned int modifiers, HotkeyCallback callback) {
+    return HotkeyManager::RegisterGamepadWithModifiers(id, defaultConfigCode, static_cast<uint8_t>(modifiers), callback);
+}
+
+unsigned int GetHotkeyModifiers(const char* id) {
+    return HotkeyManager::GetModifiers(id);
+}
+
+void SetHotkeyBindingWithModifiers(const char* id, unsigned int scanCode, unsigned int modifiers) {
+    HotkeyManager::SetBindingWithModifiers(id, scanCode, static_cast<uint8_t>(modifiers));
+}
+
+bool HasHotkeyConflictWithModifiers(unsigned int scanCode, unsigned int modifiers, const char* excludeId) {
+    return !HotkeyManager::GetConflicts(scanCode, static_cast<uint8_t>(modifiers), excludeId).empty();
 }
 
 // --- Gamepad Query API ---

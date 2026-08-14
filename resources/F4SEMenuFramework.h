@@ -5,6 +5,22 @@
 #include <locale>
 #include <string>
 
+// Optional: named scan codes for the Hotkey API (DIK::F1, GamepadCode::DpadUp).
+// Copy DIK.h next to this header ONLY if your plugin registers hotkeys —
+// without it every other part of this header still compiles and works. Must be
+// included here at global scope, not further down inside the namespace, or the
+// constants would nest as F4SEMenuFramework::DIK::F1. See the Hotkey API
+// section below for usage.
+#if defined(__has_include)
+#  if __has_include("DIK.h")
+#    include "DIK.h"
+#    define F4SEMENUFRAMEWORK_HAS_DIK 1
+#  endif
+#endif
+#ifndef F4SEMENUFRAMEWORK_HAS_DIK
+#  define F4SEMENUFRAMEWORK_HAS_DIK 0
+#endif
+
 // F4SE may load plugins in any order; resolve the host module on each use (not once at DLL load).
 [[nodiscard]] inline HMODULE F4SEMenuFramework_GetHostModule() noexcept
 {
@@ -79,6 +95,7 @@ namespace F4SEMenuFramework {
         using ActionFunction = void (*)();
         using AddWindowFunction = Model::WindowInterface* (*)(RenderFunction);
         using AddSectionItemFunction = void (*)(const char* path, RenderFunction rendererFunction);
+        using CloseMenuFunction = void (*)();
 
         using RegisterInputEventFuction = int64_t (*)(InputEventCallback callback);
         using UnregisterInputEventFuction = void (*)(uint64_t id);
@@ -144,6 +161,17 @@ namespace F4SEMenuFramework {
         }
         return nullptr;
     }
+    // Requests the framework's normal main-panel close transaction. Returning
+    // false means the loaded framework predates this optional export; callers
+    // can leave their own window open without dereferencing a missing symbol.
+    inline bool CloseMenu() {
+        static auto func = Model::Internal::GetFunction<Model::CloseMenuFunction>("CloseMenu");
+        if (!func) {
+            return false;
+        }
+        func();
+        return true;
+    }
     inline Model::InputEvent* AddInputEvent(Model::InputEventCallback callback) {
         return new Model::InputEvent(callback);
     }
@@ -189,6 +217,25 @@ namespace F4SEMenuFramework {
     //  rebinds).
     //  Plugins handle their own rebind UI if desired; the framework provides
     //  query/set helpers for the current binding.
+    //
+    //  ---- Named scan codes (optional) ----------------------------------------
+    //  The calls below take a raw scan code. If you drop DIK.h next to this
+    //  header, you get named constants and can write
+    //
+    //      Hotkeys::Register("MyMod.Toggle", DIK::F1, &OnToggle);
+    //      Hotkeys::RegisterGamepad("MyMod.Quick", GamepadCode::DpadUp, &OnQuick);
+    //
+    //  instead of 0x3B and 1. DIK.h is header-only, depends on nothing, and is
+    //  ONLY worth copying if your plugin registers hotkeys — everything else in
+    //  this header works without it. Grab it from the framework's resources/
+    //  folder alongside this file.
+    //
+    //  Keyboard codes are DirectInput (DIK_*) scan codes as the game reports
+    //  them, NOT Windows virtual-key codes: VK_F1 (0x70) is wrong here, F1 is
+    //  0x3B. Extended keys carry bit 0x80, so PageUp is 0xC9 and not 0x49.
+    //
+    //  DIK.h is pulled in at the top of this file, so the constants live at
+    //  global scope: DIK::F1, not F4SEMenuFramework::DIK::F1.
     // =========================================================================
 
     namespace Hotkeys {
@@ -257,6 +304,59 @@ namespace F4SEMenuFramework {
                 return func(id, defaultConfigCode, callback);
             }
             return -1;
+        }
+
+        // ── Chord (Ctrl/Shift/Alt) variants ──────────────────────────────────
+        // `modifiers` is a bitmask of HotkeyMod::Ctrl (1) / Shift (2) / Alt (4)
+        // from DIK.h — or pass the raw 1/2/4 if you did not copy DIK.h. 0 is
+        // identical to the plain functions above. A modified binding fires only
+        // when exactly those keyboard modifiers are held; a plain (0) binding
+        // fires regardless, so adding chords never disturbs existing binds.
+        // These resolve separate exports, so on an older framework DLL they
+        // safely no-op (return -1 / false) while the plain functions still work.
+        using RegisterModFunction = int64_t(*)(const char*, unsigned int, unsigned int, HotkeyCallback);
+        using GetModifiersFunction = unsigned int(*)(const char*);
+        using SetBindingModFunction = void(*)(const char*, unsigned int, unsigned int);
+        using HasConflictModFunction = bool(*)(unsigned int, unsigned int, const char*);
+
+        inline int64_t RegisterWithModifiers(const char* id, unsigned int defaultScanCode, unsigned int modifiers, HotkeyCallback callback) {
+            static auto func = Model::Internal::GetFunction<RegisterModFunction>("RegisterHotkeyWithModifiers");
+            if (func) {
+                return func(id, defaultScanCode, modifiers, callback);
+            }
+            return -1;
+        }
+
+        inline int64_t RegisterGamepadWithModifiers(const char* id, unsigned int defaultConfigCode, unsigned int modifiers, HotkeyCallback callback) {
+            static auto func = Model::Internal::GetFunction<RegisterModFunction>("RegisterGamepadHotkeyWithModifiers");
+            if (func) {
+                return func(id, defaultConfigCode, modifiers, callback);
+            }
+            return -1;
+        }
+
+        // Current modifier bitmask for a hotkey id (0 = none / plain).
+        inline unsigned int GetModifiers(const char* id) {
+            static auto func = Model::Internal::GetFunction<GetModifiersFunction>("GetHotkeyModifiers");
+            if (func) {
+                return func(id);
+            }
+            return 0;
+        }
+
+        inline void SetBindingWithModifiers(const char* id, unsigned int scanCode, unsigned int modifiers) {
+            static auto func = Model::Internal::GetFunction<SetBindingModFunction>("SetHotkeyBindingWithModifiers");
+            if (func) {
+                func(id, scanCode, modifiers);
+            }
+        }
+
+        inline bool HasConflictWithModifiers(unsigned int scanCode, unsigned int modifiers, const char* excludeId) {
+            static auto func = Model::Internal::GetFunction<HasConflictModFunction>("HasHotkeyConflictWithModifiers");
+            if (func) {
+                return func(scanCode, modifiers, excludeId);
+            }
+            return false;
         }
     }
 

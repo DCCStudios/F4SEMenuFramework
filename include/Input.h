@@ -19,16 +19,8 @@ private:
 
 };
 
-static DoublePressDetector DoublePressDetectorKeyboard;
-static DoublePressDetector DoublePressDetectorGamepad;
-
 inline bool IsSupportedDeviceType(RE::INPUT_DEVICE device) {
     return device == RE::INPUT_DEVICE::kKeyboard || device == RE::INPUT_DEVICE::kGamepad;
 }
 
 bool IsSupportedDevice(RE::INPUT_DEVICE device);
-
-
-namespace UI {
-    void TranslateInputEvent(RE::InputEvent* const* a_event);
-}

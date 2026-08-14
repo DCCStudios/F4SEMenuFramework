@@ -10,6 +10,7 @@
 
 FUNCTION_PREFIX void AddSectionItem(const char* path, RenderFunction rendererFunction);
 FUNCTION_PREFIX WindowInterface* AddWindow(RenderFunction rendererFunction);
+FUNCTION_PREFIX void CloseMenu();
 FUNCTION_PREFIX void PushBig();
 FUNCTION_PREFIX void PushDefault();
 FUNCTION_PREFIX void PushSmall();
@@ -37,6 +38,14 @@ FUNCTION_PREFIX void UnregisterHotkey(int64_t handle);
 FUNCTION_PREFIX unsigned int GetHotkeyBinding(const char* id);
 FUNCTION_PREFIX void SetHotkeyBinding(const char* id, unsigned int scanCode);
 FUNCTION_PREFIX bool HasHotkeyConflict(unsigned int scanCode, const char* excludeId);
+
+// Chord (Ctrl/Shift/Alt) variants — `modifiers` is a HotkeyMod bitmask; 0 is
+// identical to the plain entry points above.
+FUNCTION_PREFIX int64_t RegisterHotkeyWithModifiers(const char* id, unsigned int defaultScanCode, unsigned int modifiers, HotkeyCallback callback);
+FUNCTION_PREFIX int64_t RegisterGamepadHotkeyWithModifiers(const char* id, unsigned int defaultConfigCode, unsigned int modifiers, HotkeyCallback callback);
+FUNCTION_PREFIX unsigned int GetHotkeyModifiers(const char* id);
+FUNCTION_PREFIX void SetHotkeyBindingWithModifiers(const char* id, unsigned int scanCode, unsigned int modifiers);
+FUNCTION_PREFIX bool HasHotkeyConflictWithModifiers(unsigned int scanCode, unsigned int modifiers, const char* excludeId);
 
 // --- Gamepad Query API ---
 FUNCTION_PREFIX bool IsControllerConnected();

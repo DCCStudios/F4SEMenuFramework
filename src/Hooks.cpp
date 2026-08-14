@@ -34,6 +34,114 @@ void Hooks::Install() {
 
 void Hooks::InstallInputHooks() {
     DevicePollHook::install();
+    InputQueueHook::install();
+}
+
+// ---------------------------------------------------------------------------
+// InputQueueHook — makes the AddInputEvent plugin API actually dispatch.
+//
+// InputEventHandler::Process (and the RegisterInpoutEvent export feeding it)
+// shipped as dead code in framework 3: the Skyrim original called it from an
+// input-queue hook that the F4 port replaced with the WndProc path, and no
+// caller was ever re-added. Plugin callbacks registered via AddInputEvent
+// never fired (found the hard way by MagnaScope, whose source documented the
+// workaround).
+//
+// The dispatch point is BSInputEventReceiver::PerformInputProcessing (vfunc
+// slot 0). No single receiver carries every device in every state — verified
+// in game by cross-referencing ADS windows against which events arrived:
+//
+//   * PlayerCamera's receiver (base at +0x38, the "Bingle method" receiver
+//     UneducatedShooter / MagnaScope / FPGunplayOverhaul hook) carries the
+//     KEYBOARD in all states, but the engine routes the mouse WHEEL away from
+//     it while the player is sighted (ADS).
+//   * PlayerControls' receiver (its own first base, offset 0 — the slot
+//     ScrollWheelWeaponSelect hooks to switch weapons by scrolling, which works
+//     while aiming) carries the MOUSE (and gamepad) in all states, but no
+//     keyboard.
+//
+// So we hook BOTH and split by device: keyboard (and any non-pointer device)
+// dispatches from the camera receiver, mouse + gamepad from the controls
+// receiver. Each event is dispatched exactly once — the camera thunk skips
+// pointer events, the controls thunk skips the rest — so nothing double-fires
+// even in the states where both receivers happen to carry the same event.
+//
+// (An earlier single-receiver cut used PlayerControls alone — mouse worked,
+// keyboard never arrived; then PlayerCamera alone — keyboard worked, wheel died
+// while sighted. Neither is sufficient on its own.)
+//
+// Both are chain-friendly vtable-slot-0 hooks (save previous, forward), so they
+// compose with the mods above in install order. No Address Library ID, so it
+// works on every runtime.
+// ---------------------------------------------------------------------------
+
+// Hooks vtable slot 0 of `receiver`, storing the previous entry in `outOrig`.
+// Returns false (and logs `who`) on failure. Shared by both receivers.
+static bool HookReceiverSlot0(RE::BSInputEventReceiver* receiver, void* thunkAddr,
+                              void (**outOrig)(RE::BSInputEventReceiver*, RE::InputEvent*),
+                              const char* who) {
+    void** vTable = *reinterpret_cast<void***>(receiver);
+    DWORD oldProtect;
+    if (!VirtualProtect(&vTable[0], sizeof(void*), PAGE_READWRITE, &oldProtect)) {
+        logger::error("VirtualProtect failed on {} vtable — AddInputEvent dispatch degraded", who);
+        return false;
+    }
+    *outOrig = reinterpret_cast<void (*)(RE::BSInputEventReceiver*, RE::InputEvent*)>(vTable[0]);
+    vTable[0] = thunkAddr;
+    VirtualProtect(&vTable[0], sizeof(void*), oldProtect, &oldProtect);
+    logger::info("{} PerformInputProcessing hook installed (vtable {:X})",
+        who, reinterpret_cast<std::uintptr_t>(vTable));
+    return true;
+}
+
+void Hooks::InputQueueHook::install() {
+    // Idempotent: kGameDataReady can fire on every save/new-game load. Hooking
+    // the same vtable slot twice would save our OWN thunk as the original and
+    // recurse forever, so install exactly once.
+    static bool installed = false;
+    if (installed) return;
+    installed = true;
+
+    // Keyboard receiver: PlayerCamera + 0x38 (BSInputEventReceiver base).
+    if (auto* camera = RE::PlayerCamera::GetSingleton()) {
+        HookReceiverSlot0(static_cast<RE::BSInputEventReceiver*>(camera),
+            reinterpret_cast<void*>(&cameraThunk), &cameraOriginal, "PlayerCamera");
+    } else {
+        logger::error("PlayerCamera::GetSingleton() null — keyboard AddInputEvent dispatch unavailable");
+    }
+
+    // Mouse/gamepad receiver: PlayerControls (BSInputEventReceiver is its first
+    // base, offset 0, so the singleton pointer IS the receiver pointer).
+    if (auto* controls = RE::PlayerControls::GetSingleton()) {
+        HookReceiverSlot0(static_cast<RE::BSInputEventReceiver*>(controls),
+            reinterpret_cast<void*>(&controlsThunk), &controlsOriginal, "PlayerControls");
+    } else {
+        logger::error("PlayerControls::GetSingleton() null — mouse AddInputEvent dispatch unavailable");
+    }
+}
+
+// Shared dispatch body. `filter` selects which devices this receiver owns;
+// events outside it are left in the chain for the other receiver / the engine.
+static void DispatchQueue(RE::InputEvent*& queueHead, InputEventHandler::DeviceFilter filter) {
+    if (queueHead && InputEventHandler::HasCallbacks() &&
+        !WindowManager::ShouldTheGameBePaused()) {
+        InputEventHandler::Process(&queueHead, filter);
+    }
+}
+
+void __fastcall Hooks::InputQueueHook::cameraThunk(RE::BSInputEventReceiver* receiver, RE::InputEvent* queueHead) {
+    // Keyboard (and any non-pointer device). Mouse/gamepad are skipped here and
+    // owned by the controls receiver, so the wheel is never dispatched twice
+    // in states where the camera receiver also happens to carry it.
+    DispatchQueue(queueHead, InputEventHandler::DeviceFilter::kNonPointer);
+    cameraOriginal(receiver, queueHead);
+}
+
+void __fastcall Hooks::InputQueueHook::controlsThunk(RE::BSInputEventReceiver* receiver, RE::InputEvent* queueHead) {
+    // Mouse + gamepad. This receiver carries the wheel in all states including
+    // ADS, which the camera receiver does not.
+    DispatchQueue(queueHead, InputEventHandler::DeviceFilter::kPointer);
+    controlsOriginal(receiver, queueHead);
 }
 
 // ---------------------------------------------------------------------------
@@ -616,6 +724,44 @@ LRESULT Hooks::WndProcHook::thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             ::SetCursor(nullptr);
             return TRUE;
         }
+
+        // Optional keyboard lock-out while navigating with a controller:
+        // stray keyboard events (Steam Input keyboard emulation, remote
+        // play, a bumped keyboard) can hijack ImGui nav focus or type into
+        // text fields mid-navigation. When the setting is on and a pad is
+        // connected, swallow keyboard messages before ImGui sees them.
+        // Exceptions that stay live:
+        //  * hotkey capture — it polls GetAsyncKeyState directly and needs
+        //    the keyboard to bind keys, so suppression pauses during capture;
+        //  * the menu toggle key and ESC-to-close, handled above this block.
+        const bool suppressKeyboard =
+            Config::DisableKeyboardWithGamepad &&
+            GamepadInput::IsControllerConnected() &&
+            !MCMWidgetRenderer::IsHotkeyCaptureActive();
+        // A key held down when suppression engages would otherwise stay
+        // "down" in ImGui forever (its WM_KEYUP gets swallowed) — clear
+        // ImGui's key state once on the transition.
+        static bool s_wasSuppressingKeyboard = false;
+        if (suppressKeyboard && !s_wasSuppressingKeyboard) {
+            ImGui::GetIO().ClearInputKeys();
+        }
+        s_wasSuppressingKeyboard = suppressKeyboard;
+        if (suppressKeyboard) {
+            switch (uMsg) {
+                case WM_KEYDOWN:
+                case WM_KEYUP:
+                case WM_SYSKEYDOWN:
+                case WM_SYSKEYUP:
+                case WM_CHAR:
+                case WM_SYSCHAR:
+                case WM_DEADCHAR:
+                case WM_SYSDEADCHAR:
+                    return true;  // swallowed: hidden from ImGui AND the game
+                default:
+                    break;
+            }
+        }
+
         ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam);
         return true;
     }

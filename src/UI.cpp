@@ -797,6 +797,33 @@ void UI::RenderConfigWindow() {
             }
         }
 
+        // --- Pause-menu button placement ---
+        // Maps combo rows to Config::PauseMenuButtonPos: 0..4 = that slot from
+        // the top, -1 = bottom. Applied on the next PauseMenu open (the row is
+        // injected fresh each time the pause menu loads).
+        {
+            const char* posNames[] = { "Top", "2nd from top", "3rd from top",
+                                       "4th from top", "5th from top", "Bottom" };
+            const int posValues[] = { 0, 1, 2, 3, 4, -1 };
+            int currentPosIdx = 0;
+            for (int i = 0; i < IM_ARRAYSIZE(posValues); ++i) {
+                if (posValues[i] == Config::PauseMenuButtonPos) {
+                    currentPosIdx = i;
+                    break;
+                }
+            }
+            ImGui::Text("Pause Menu Button Position");
+            if (ImGui::Combo("##PauseMenuButtonPosCombo", &currentPosIdx, posNames,
+                             IM_ARRAYSIZE(posNames))) {
+                Config::PauseMenuButtonPos = posValues[currentPosIdx];
+                Config::Save();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Where the F4SE FRAMEWORK entry appears in the pause menu list.\n"
+                                  "Takes effect the next time the pause menu opens.");
+            }
+        }
+
         const char* togleModeNames[] = {"SINGLEPRESS", "HOLD", "DOUBLEPRESS", "OFF"};
         int currentTogleMode = static_cast<int>(Config::ToggleMode);
         ImGui::Text(Translations::Get("Settings.ToggleMode.Keyboard"));
@@ -970,6 +997,16 @@ void UI::RenderConfigWindow() {
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Which controller button art the hint bar uses.");
+        }
+
+        if (ToggleButton("Disable Keyboard Input While Using Gamepad", &Config::DisableKeyboardWithGamepad)) {
+            Config::Save();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("While a controller is connected, the menu ignores keyboard input so\n"
+                              "stray key events can't fight controller navigation.\n"
+                              "Setting a keybind still reads the keyboard, and the menu\n"
+                              "toggle key and ESC (close menu) keep working.");
         }
         ImGui::PopItemWidth();
 

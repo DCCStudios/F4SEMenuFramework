@@ -1,4 +1,5 @@
 #include "PauseMenuButton.h"
+#include "Config.h"
 #include "WindowManager.h"
 
 #include "RE/B/BSTEvent.h"
@@ -25,8 +26,11 @@
 //
 // Separately, on PauseMenu open we insert the list row from C++ (PhotoMode-style)
 // so the "F4SE FRAMEWORK" entry appears as soon as the menu is up — without
-// waiting for F4SEFramework.swf to finish loading. Placement is top-of-list only;
-// we do not move the row relative to MCM.
+// waiting for F4SEFramework.swf to finish loading. Placement follows the
+// user-configurable slot (Config::PauseMenuButtonPos); we do not move the row
+// relative to MCM. The SWF's own ActionScript fallback still inserts at the
+// top, but it only fires in the rare case where C++ ran before the list
+// existed — the C++ menu-open sink is the path that actually places the row.
 
 namespace
 {
@@ -77,8 +81,20 @@ namespace
         }
     };
 
-    // Insert (or confirm) the F4SE FRAMEWORK row on the pause list. Returns true
-    // when the row is present afterwards. Safe to call repeatedly.
+    // Insert the F4SE FRAMEWORK row on the pause list at the user-configured
+    // slot, or MOVE it there if an earlier pass already inserted it somewhere
+    // else. Returns true when the row is present afterwards. Safe to call
+    // repeatedly.
+    //
+    // Timing caveat: both C++ call sites (the Scaleform callback and the
+    // PauseMenu-open sink) run BEFORE the game populates the vanilla rows,
+    // so the desired slot clamps against a near-empty array and the row
+    // lands at the top regardless of the setting. That early insert is kept
+    // for instant appearance; the authoritative placement happens in
+    // F4SEFrameworkPause.as on ENTER_FRAME once the vanilla rows exist
+    // (reading `f4semf.buttonPos`) — the same one-frame-later timing the
+    // real MCM uses for its iPosition:Main splice. The reposition logic here
+    // is defense in depth for any call that does see a populated list.
     bool InjectListEntry(Movie* a_movie)
     {
         if (!a_movie) {
@@ -99,8 +115,10 @@ namespace
             return false;
         }
 
-        // Already present — leave it where it is (no MCM-relative reshuffle).
+        // Find our row if a previous pass (C++ early inject or the SWF's
+        // ActionScript fallback) already added it.
         const auto size = entryList.GetArraySize();
+        std::int64_t foundIdx = -1;
         for (std::uint32_t i = 0; i < size; ++i) {
             Value entry;
             if (!entryList.GetElement(i, std::addressof(entry)) || !entry.IsObject()) {
@@ -109,7 +127,40 @@ namespace
             Value indexVal;
             if (entry.GetMember("index", std::addressof(indexVal)) && indexVal.IsNumber() &&
                 indexVal.GetNumber() == kEntryIndex) {
-                return true;
+                foundIdx = i;
+                break;
+            }
+        }
+
+        // Desired slot (Settings > "Pause Menu Button Position"): 0 = top,
+        // 1..N = that many rows down, -1 = bottom. Computed against the list
+        // WITHOUT our row so "bottom" means the true last slot and a move
+        // can't be off by one. Rows other mods (e.g. MCM) inject after this
+        // pass can still shift ours; we deliberately do not chase them.
+        const std::uint32_t others = (foundIdx >= 0) ? size - 1 : size;
+        std::uint32_t desired;
+        if (Config::PauseMenuButtonPos < 0) {
+            desired = others;  // bottom
+        } else {
+            desired = std::min<std::uint32_t>(
+                static_cast<std::uint32_t>(Config::PauseMenuButtonPos), others);
+        }
+
+        // Already in the right place — done.
+        if (foundIdx >= 0 && static_cast<std::uint32_t>(foundIdx) == desired) {
+            return true;
+        }
+
+        // Misplaced: remove the old row first, then fall through to a fresh
+        // insert at the desired slot.
+        if (foundIdx >= 0) {
+            Value removeArgs[2];
+            removeArgs[0] = static_cast<double>(foundIdx);
+            removeArgs[1] = 1.0;
+            if (!entryList.Invoke("splice", nullptr, removeArgs, 2)) {
+                logger::warn("[PauseMenuButton] entryList.splice (remove) failed — leaving row at slot {}",
+                    foundIdx);
+                return true;  // row still exists, just not where configured
             }
         }
 
@@ -118,10 +169,8 @@ namespace
         newEntry.SetMember("text", kEntryText);
         newEntry.SetMember("index", kEntryIndex);
 
-        // Always insert at the top. MCM may land above or below us depending on
-        // load order — we deliberately do not chase or reposition relative to it.
         Value spliceArgs[3];
-        spliceArgs[0] = 0.0;
+        spliceArgs[0] = static_cast<double>(desired);
         spliceArgs[1] = 0.0;
         spliceArgs[2] = newEntry;
         if (!entryList.Invoke("splice", nullptr, spliceArgs, 3)) {
@@ -134,7 +183,13 @@ namespace
             list.Invoke("InvalidateData");
         }
 
-        logger::info("[PauseMenuButton] List row injected (index {})", static_cast<int>(kEntryIndex));
+        if (foundIdx >= 0) {
+            logger::info("[PauseMenuButton] List row moved from slot {} to slot {} (index {})",
+                foundIdx, desired, static_cast<int>(kEntryIndex));
+        } else {
+            logger::info("[PauseMenuButton] List row injected at slot {} (index {})",
+                desired, static_cast<int>(kEntryIndex));
+        }
         return true;
     }
 
@@ -174,6 +229,14 @@ namespace
         Value openFn;
         root->CreateFunction(std::addressof(openFn), new OpenMenuFunc());
         codeObj.SetMember("OpenMenu", openFn);
+
+        // Expose the configured pause-list slot to the SWF (0 = top,
+        // 1..N = rows down, -1 = bottom). The SWF applies it on ENTER_FRAME
+        // once the game has populated the list — the same timing the real
+        // MCM uses for its iPosition:Main splice. The C++ injects below run
+        // before population, so THEY always clamp to the top; the SWF pass
+        // is what puts the row at the configured slot.
+        codeObj.SetMember("buttonPos", static_cast<double>(Config::PauseMenuButtonPos));
 
         rootObj.SetMember("f4semf", codeObj);
 

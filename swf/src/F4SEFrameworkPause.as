@@ -14,7 +14,11 @@ package
 	//
 	// Its job:
 	//   1. Ensure a single scrolling-list row labelled "F4SE FRAMEWORK" exists
-	//      at the top of the pause list (no MCM-relative placement).
+	//      at the user-configured slot of the pause list (read from
+	//      `f4semf.buttonPos`; no MCM-relative placement). The DLL may insert
+	//      the row early for instant appearance, but that runs before the game
+	//      populates the list, so this class moves it to the right slot once
+	//      the vanilla rows exist.
 	//   2. When the player selects that row, call `f4semf.OpenMenu()` on the
 	//      host root so the ImGui overlay opens.
 	public class F4SEFrameworkPause extends MovieClip
@@ -33,11 +37,24 @@ package
 		// Cached reference to the pause menu clip (root.Menu_mc) once found.
 		private var menuClip:MovieClip = null;
 
+		// Press listener is attached once, as soon as the list exists, so a
+		// DLL-injected row is clickable even while placement is still pending.
+		private var listenerAttached:Boolean = false;
+
+		// Frames spent waiting for the game to populate the vanilla rows.
+		// Safety cap so we can't listen forever if the list stays empty.
+		private var framesWaited:int = 0;
+		private static const MAX_WAIT_FRAMES:int = 60;
+
 		public function F4SEFrameworkPause()
 		{
 			super();
-			// Same pattern as MCM_Main: one ENTER_FRAME once the host list
-			// exists, then inject (or attach to a row the DLL already added).
+			// Same pattern as MCM_Main: act on ENTER_FRAME once the host list
+			// exists AND the game has filled in the vanilla rows — placement
+			// against a still-empty list would clamp every slot to the top,
+			// which is exactly the bug the DLL-side injects have (they run
+			// before population and always land at slot 0; this handler is
+			// what moves the row to the user-configured slot).
 			addEventListener(Event.ENTER_FRAME, onEnterFrame);
 		}
 
@@ -73,28 +90,56 @@ package
 				return;
 			}
 
-			// Row may already exist (DLL injected it on PauseMenu open) —
-			// still attach the press listener before we stop listening.
-			if (!hasOurEntry(entries))
+			if (!listenerAttached)
 			{
-				entries.splice(0, 0, { "text": F4SE_ENTRY_TEXT, "index": F4SE_ENTRY_INDEX });
+				menuClip.addEventListener("BSScrollingList::itemPress", onItemPress);
+				listenerAttached = true;
+			}
+
+			var ourIdx:int = indexOfOurEntry(entries);
+			var others:int = entries.length - (ourIdx >= 0 ? 1 : 0);
+
+			// Vanilla rows not in yet — wait another frame (capped). The real
+			// MCM relies on the same one-frame-later timing for iPosition:Main.
+			framesWaited++;
+			if (others == 0 && framesWaited < MAX_WAIT_FRAMES)
+			{
+				return;
+			}
+
+			// Configured slot from the DLL (0 = top, N = rows down, -1 =
+			// bottom), clamped against the list without our own row.
+			var pos:int = 0;
+			var codeObj:Object = host["f4semf"];
+			if (codeObj && codeObj.buttonPos !== undefined)
+			{
+				pos = int(codeObj.buttonPos);
+			}
+			var desired:int = (pos < 0) ? others : ((pos < others) ? pos : others);
+
+			if (ourIdx != desired)
+			{
+				if (ourIdx >= 0)
+				{
+					entries.splice(ourIdx, 1);  // remove misplaced row first
+				}
+				entries.splice(desired, 0, { "text": F4SE_ENTRY_TEXT, "index": F4SE_ENTRY_INDEX });
 				list.InvalidateData();
 			}
 
-			menuClip.addEventListener("BSScrollingList::itemPress", onItemPress);
 			removeEventListener(Event.ENTER_FRAME, onEnterFrame);
 		}
 
-		private function hasOurEntry(entries:Array):Boolean
+		private function indexOfOurEntry(entries:Array):int
 		{
 			for (var i:int = 0; i < entries.length; i++)
 			{
 				if (entries[i] && entries[i].index == F4SE_ENTRY_INDEX)
 				{
-					return true;
+					return i;
 				}
 			}
-			return false;
+			return -1;
 		}
 
 		// Fired for every pause-menu list press. Acts only on our row.

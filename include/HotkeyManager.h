@@ -25,6 +25,8 @@ public:
         std::string id;
         unsigned int scanCode = 0;        // current binding (DIK scan code or gamepad config code)
         unsigned int defaultScanCode = 0; // original default for reset
+        uint8_t modifiers = 0;            // required Ctrl/Shift/Alt (HotkeyMod bits); 0 = plain
+        uint8_t defaultModifiers = 0;     // original default modifiers for reset
         HotkeyCallback callback = nullptr;
         HotkeyCallback releaseCallback = nullptr; // optional key-up callback (keyboard only)
         bool isDown = false;              // down was dispatched, awaiting matching up
@@ -40,11 +42,21 @@ public:
     // (e.g. 4096=A, 8192=B, 256=LB, 9=LT, 10=RT).
     static int64_t RegisterGamepad(const char* id, unsigned int defaultConfigCode, HotkeyCallback callback);
 
+    // Chord variants: defaultModifiers is a HotkeyMod bitmask (Ctrl/Shift/Alt).
+    // 0 is identical to the plain Register above. A modified binding only fires
+    // when exactly those modifiers are held; a plain (0) binding fires
+    // regardless of modifier state, so mixing the two is additive.
+    static int64_t RegisterWithModifiers(const char* id, unsigned int defaultScanCode, uint8_t defaultModifiers, HotkeyCallback callback);
+    static int64_t RegisterGamepadWithModifiers(const char* id, unsigned int defaultConfigCode, uint8_t defaultModifiers, HotkeyCallback callback);
+
     static void Unregister(int64_t handle);
 
     // Query / change binding at runtime (for mods building their own rebind UI).
     static unsigned int GetBinding(const char* id);
     static void SetBinding(const char* id, unsigned int scanCode);
+    // Modifier-aware query/set. GetModifiers returns the HotkeyMod bitmask.
+    static uint8_t GetModifiers(const char* id);
+    static void SetBindingWithModifiers(const char* id, unsigned int scanCode, uint8_t modifiers);
 
     // True when a hotkey with this id has been registered.
     static bool IsRegistered(const char* id);
@@ -54,10 +66,14 @@ public:
     // (that file is already the source of truth, so echoing back is pointless).
     static void ImportBinding(const char* id, unsigned int scanCode);
 
-    // Returns all hotkey ids currently bound to the given scan code, excluding
-    // the specified id (pass nullptr to get all). Useful for mods to check for
-    // conflicts before calling SetBinding.
+    // Returns all bindings that clash with the given scan code, excluding the
+    // specified id (pass nullptr to get all). Includes other framework hotkeys
+    // AND the player's game controls (prefixed "[Game] "). The plain overload
+    // assumes no modifiers; the modifier-aware one only reports clashes with
+    // the same modifier set (and, when modifiers != 0, never reports game
+    // controls, since those are unmodified). Useful for a mod's own rebind UI.
     static std::vector<std::string> GetConflicts(unsigned int scanCode, const char* excludeId);
+    static std::vector<std::string> GetConflicts(unsigned int scanCode, uint8_t modifiers, const char* excludeId);
 
     // Attach a key-up callback to an already-registered keyboard hotkey.
     // Needed by MCM SendEvent keybinds, which deliver both OnControlDown and
@@ -85,7 +101,7 @@ public:
     static void Save();
 
     // Shows a centered confirmation dialog about hotkey conflicts.
-    static void ShowConflictWarning(const std::string& hotkeyId, const std::vector<std::string>& conflicts, unsigned int scanCode);
+    static void ShowConflictWarning(const std::string& hotkeyId, const std::vector<std::string>& conflicts, unsigned int scanCode, uint8_t modifiers);
 
     // Internal state — accessible by conflict dialog for deferred binding application.
     static inline int64_t autoIncrement = 0;
