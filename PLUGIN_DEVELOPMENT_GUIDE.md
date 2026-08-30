@@ -912,6 +912,17 @@ F4SEMenuFramework::Hotkeys::SetBindingWithModifiers("MyMod.Toggle", DIK::F1, Hot
 - These are separate exports, so on a framework DLL too old to have them the
   wrappers no-op (return -1 / false) while the plain functions keep working.
 
+> **Combos need a framework-native hotkey, not an MCM keybind.** These chords
+> work because the framework itself dispatches your callback and checks the held
+> modifiers. A keybind a user rebinds through an **MCM config page** (the "MCM
+> Mod Configs (Legacy)" keybind controls) is single-key: the mod's own Papyrus
+> reads one key and never sees Ctrl/Shift/Alt, so the framework's rebind prompt
+> only accepts a single key there and quietly drops a held modifier. To offer a
+> combo, register the hotkey with `RegisterWithModifiers` and let the framework
+> dispatch it as shown above, then either ship a default (e.g. `Ctrl+F1`) or
+> expose your own rebind UI that calls `SetBindingWithModifiers`. The framework
+> menu does not turn an MCM keybind into a combo.
+
 > Note: `Alt`-based chords on some keys (notably `Alt+F4`) collide with OS/window
 > shortcuts that the game never sees; prefer Ctrl/Shift there.
 

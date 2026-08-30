@@ -743,7 +743,13 @@ namespace MCMWidgetRenderer {
             return s_captureHeldAtStart.find(vk) != s_captureHeldAtStart.end();
         };
 
-        // Applies a captured code: conflict-check, bind, notify.
+        // Applies a captured code as a SINGLE-key binding. MCM mod keybinds
+        // (every control captured here is "MCM.<mod>.<id>") are single-key: the
+        // mod's own Papyrus reads one key and ignores Ctrl/Shift/Alt, so a chord
+        // would be stored but never honored. Chords are a plugin-only feature
+        // (Hotkeys::RegisterWithModifiers, framework-dispatched) — see the
+        // Plugin Hotkey API docs. A held modifier is dropped here (the modifier
+        // keys are skipped as bind targets below, so a combo binds the base key).
         auto applyBinding = [&](unsigned int code) {
             auto conflicts = HotkeyManager::GetConflicts(code, s_captureHotkeyId.c_str());
             if (!conflicts.empty()) {
@@ -806,6 +812,13 @@ namespace MCMWidgetRenderer {
         // codes cleanly.
         for (int vk = 0x08; vk <= 0xFE; ++vk) {
             if (vk == VK_ESCAPE || vk == VK_TAB) continue;
+            // Skip Ctrl/Shift/Alt as bind targets. MCM keybinds are single-key,
+            // so if the user tries a combo (holds Ctrl, presses T) we bind the
+            // base key T rather than the modifier — and a bare modifier press
+            // does nothing instead of binding "Ctrl" by accident.
+            if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU ||
+                vk == VK_LSHIFT || vk == VK_RSHIFT || vk == VK_LCONTROL ||
+                vk == VK_RCONTROL || vk == VK_LMENU || vk == VK_RMENU) continue;
             if (!(GetAsyncKeyState(vk) & 0x8000)) continue;
             if (isIgnored(vk)) continue;  // held since before capture — not a fresh press
 

@@ -22,10 +22,9 @@ namespace {
 
     // Game-control conflict scan. The engine's own key bindings live in
     // RE::ControlMap: controlMaps[context]->deviceMappings[device] is an array
-    // of {eventID, inputKey}. The encodings match the framework's — keyboard
-    // inputKey is a DIK scan code, gamepad inputKey is the XInput button mask
-    // (and 9/10 for the triggers) — so a plugin/user binding can be compared
-    // directly against them.
+    // of {eventID, inputKey}. inputKey is a Windows VIRTUAL-KEY code for the
+    // keyboard (not DIK) and the XInput button mask for the gamepad; the
+    // keyboard code is converted from our DIK before comparing (see below).
     //
     // Only kMainGameplay is scanned: that's the context a framework hotkey
     // actually fires in (WndProc dispatches only while no blocking menu is
@@ -54,9 +53,39 @@ namespace {
         if (!context) return out;
 
         const auto& mappings = context->deviceMappings[std::to_underlying(reDevice)];
+
+        // ControlMap.inputKey encoding differs by device (confirmed from an
+        // in-game map dump):
+        //  - keyboard: a Windows VIRTUAL-KEY code, NOT a DirectInput scan code
+        //    (Jump=0x20/VK_SPACE, ReadyWeapon=0x52/VK_R, Sprint=0xA0/VK_LSHIFT).
+        //    Our framework code is DIK, so a raw compare mismatched — DIK 0x39
+        //    (space) collided with VK 0x39 (the '9' key = Quickkey9). Convert
+        //    DIK -> VK before comparing.
+        //  - gamepad: the XInput button mask (9/10 for triggers), same as ours.
+        unsigned int compareKey = code;
+        if (reDevice == RE::INPUT_DEVICE::kKeyboard) {
+            compareKey = MapVirtualKeyA(code, MAPVK_VSC_TO_VK_EX);
+            switch (code) {  // extended DIK codes MapVirtualKey won't reverse
+                case 0xC8: compareKey = VK_UP;       break;
+                case 0xD0: compareKey = VK_DOWN;     break;
+                case 0xCB: compareKey = VK_LEFT;     break;
+                case 0xCD: compareKey = VK_RIGHT;    break;
+                case 0xC7: compareKey = VK_HOME;     break;
+                case 0xCF: compareKey = VK_END;      break;
+                case 0xC9: compareKey = VK_PRIOR;    break;
+                case 0xD1: compareKey = VK_NEXT;     break;
+                case 0xD2: compareKey = VK_INSERT;   break;
+                case 0xD3: compareKey = VK_DELETE;   break;
+                case 0x9D: compareKey = VK_RCONTROL; break;
+                case 0xB8: compareKey = VK_RMENU;    break;
+                default: break;
+            }
+            if (compareKey == 0) return out;  // no VK mapping — can't compare
+        }
+
         for (const auto& m : mappings) {
             if (m.inputKey < 0) continue;
-            if (static_cast<unsigned int>(m.inputKey) != code) continue;
+            if (static_cast<unsigned int>(m.inputKey) != compareKey) continue;
             const char* name = m.eventID.c_str();
             if (name && name[0] != '\0') {
                 out.emplace_back(std::string("[Game] ") + name);
