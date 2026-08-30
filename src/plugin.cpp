@@ -36,7 +36,11 @@ F4SE_PLUGIN_VERSION = []() noexcept {
         F4SE::RUNTIME_1_10_163,
         F4SE::RUNTIME_1_10_980,
         F4SE::RUNTIME_1_10_984,
-        F4SE::RUNTIME_LATEST,
+        F4SE::RUNTIME_LATEST,            // 1.11.221, newest the vendored F4SE headers name
+        REL::Version{ 1, 11, 240, 0 },   // explicitly validated against version-1-11-240-0.bin
+                                         // (all AE address-library IDs present); already covered
+                                         // by the UsesAddressLibraryAE / IsLayoutDependentAE
+                                         // "1.11.137 and later" class flags, listed for clarity.
     });
     return v;
 }();
