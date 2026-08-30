@@ -14,6 +14,7 @@
 #include "F4SEMenuFramework.h"
 #include "Application.h"
 #include "GamepadInput.h"
+#include "Config.h"  // Config::ShowCategorizerEditorAlways
 #include "UI.h"  // UI::FuzzyMatch for the settings search
 #include "imgui.h"
 #include "TextureLoader.h"
@@ -433,7 +434,25 @@ namespace MCMWidgetRenderer {
     // ------------------------------------------------------------------
 
     static std::string StateKeyFor(const MCMConfigParser::MCMControl& ctrl) {
-        return ctrl.id.empty() ? ctrl.text : ctrl.id;
+        if (!ctrl.id.empty()) return ctrl.id;
+        // No author "id": mods routinely repeat display text (True Damage has a
+        // "Damage"/"Range"/"Accuracy"/"Armor Penetration" set PER weapon
+        // category; GCM repeats "rarity"/"chance"). Keying on text alone made
+        // every same-named control share ONE cached value and ONE ImGui widget
+        // id, so they moved together and toggled as one. Fold in the value
+        // source's target (unique per setting/property/global) so each control
+        // keys and renders independently. Sourceless controls (sections,
+        // spacers, plain text) keep bare text — they hold no interactive state.
+        const auto& s = ctrl.valueSource;
+        if (s.type == MCMConfigParser::SourceType::None) return ctrl.text;
+        std::string key = ctrl.text;
+        key += '\x1f';
+        key += std::to_string(static_cast<int>(s.type));
+        key += '\x1f'; key += s.sourceForm;
+        key += '\x1f'; key += s.scriptName;
+        key += '\x1f'; key += s.propertyName;
+        key += '\x1f'; key += s.settingName;
+        return key;
     }
 
     // ------------------------------------------------------------------
@@ -924,6 +943,12 @@ namespace MCMWidgetRenderer {
             // setting (matters for per-control modName overrides).
             MCMPapyrusAPI::DispatchSettingChanged(targetMod, ctrl.id);
         };
+
+        // Unique id scope for the whole control. Several widget paths below
+        // pass ctrl.text straight to ImGui as the widget label (and thus its
+        // id); without this, two controls that share display text collide into
+        // a single widget. stateKey is unique per control (see StateKeyFor).
+        ImGui::PushID(stateKey.c_str());
 
         // Render by control type
         if (ctrl.type == "switcher") {
@@ -1505,6 +1530,8 @@ namespace MCMWidgetRenderer {
                 s_focusedHelpText = ctrl.help;
             }
         }
+
+        ImGui::PopID();  // matches the control-scope PushID before the type switch
     }
 
     // --- Page rendering ---
@@ -1619,6 +1646,45 @@ namespace MCMWidgetRenderer {
     // are visually separate from native pages.
     static constexpr const char* kLegacyRoot = "MCM Mod Configs (Legacy)";
 
+    // Standalone entry point for the native category editor. Registered as a
+    // synthetic nav item so the editor is reachable even with the m8r MCM
+    // Categorizer mod removed (its Flash page, which used to host our editor,
+    // is then gone). Renders the exact same editor as the image-control hijack.
+    static void __stdcall CategorizerEditorThunk() {
+        MCMCategorizerPage::RenderEditor();
+    }
+
+    // Moves the categorizer "tool" nodes to the very top of the legacy list so
+    // they are easy to find: the m8r "MCM Categorizer" page first (when it is
+    // installed), then our "Edit Categories" entry. Rebuilds SortedChildren in
+    // place — its element type (pair<const std::string, ...>) is not
+    // assignable, so erase/insert would not compile; a fresh vector does.
+    static void PinCategorizerToolsToTop() {
+        auto it = UI::RootMenu->Children.find(kLegacyRoot);
+        if (it == UI::RootMenu->Children.end() || !it->second) return;
+        auto& kids = it->second->SortedChildren;
+
+        const char* pinned[] = { "MCM Categorizer", MCMCategorizerPage::kEditorNavLabel };
+        auto isPinned = [&](const std::string& name) {
+            for (const char* p : pinned) {
+                if (name == p) return true;
+            }
+            return false;
+        };
+
+        std::vector<std::pair<const std::string, UI::MenuTree*>> reordered;
+        reordered.reserve(kids.size());
+        for (const char* name : pinned) {          // pinned first, in order
+            for (auto& child : kids) {
+                if (child.first == name) { reordered.push_back(child); break; }
+            }
+        }
+        for (auto& child : kids) {                  // then the rest, original order
+            if (!isPinned(child.first)) reordered.push_back(child);
+        }
+        kids = std::move(reordered);
+    }
+
     void BuildSectionTree() {
         // Feed the categorizer the full catalog (folder / config modName /
         // translated display name per mod).
@@ -1675,6 +1741,22 @@ namespace MCMWidgetRenderer {
             ++added;
             logger::debug("[MCMWidgetRenderer] Nav item '{}' (slot {})", path, slot);
         }
+
+        // Standalone category editor entry. Needs at least one MCM page to
+        // categorize. Hidden while the m8r MCM Categorizer mod is installed
+        // (its own page already opens this editor) unless the user opts in;
+        // always shown once that mod is gone (then it is the only door).
+        if (added > 0) {
+            const bool m8rInstalled = MCMCategorizerPage::IsLegacyModInstalled();
+            if (!m8rInstalled || Config::ShowCategorizerEditorAlways) {
+                const std::string editorPath =
+                    std::string(kLegacyRoot) + "/" + MCMCategorizerPage::kEditorNavLabel;
+                AddSectionItem(editorPath.c_str(), &CategorizerEditorThunk);
+            }
+            // Pin the categorizer tools to the top of the legacy list.
+            PinCategorizerToolsToTop();
+        }
+
         logger::info("[MCMWidgetRenderer] Section tree built: {} page item(s){}",
                      added, categorized ? " (MCM Categorizer grouping applied)" : "");
     }

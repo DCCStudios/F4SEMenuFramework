@@ -171,6 +171,12 @@ void RenderNode(std::pair<const std::string, UI::MenuTree*>& node, bool ancestor
     // rather than as a mod with pages.
     const bool isCategory = isGroupOnly && MCMCategorizerPage::IsCategoryNavLabel(node.first);
 
+    // Categorizer TOOL leaves (the m8r "MCM Categorizer" page and our native
+    // "Edit Categories"), pinned to the top of the legacy list. They are pages
+    // (have Render), not folders, so they get their own leaf accent below.
+    const bool isTool = !isCategory && node.second->Render &&
+                        MCMCategorizerPage::IsCategorizerToolNavLabel(node.first);
+
     // Auto-expand nodes that are only visible because something beneath them
     // matches, so search results are immediately reachable.
     if (filterActive && descendantMatch && node.second->Children.size() != 0) {
@@ -211,6 +217,28 @@ void RenderNode(std::pair<const std::string, UI::MenuTree*>& node, bool ancestor
         ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
         ImGui::TextUnformatted(navTitle);
         ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopStyleColor();
+    } else if (isTool) {
+        // Cool accent (blended toward cyan) + a wrench icon, distinct from the
+        // gold category folders, so the categorizer tools read as tools and
+        // stand out at the top of the list. Leaf: clicking selects the page.
+        const ImVec4 base = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        const ImVec4 accent{
+            base.x * 0.45f + 0.30f * 0.55f,
+            base.y * 0.45f + 0.75f * 0.55f,
+            base.z * 0.45f + 1.00f * 0.55f,
+            base.w};
+        ImGui::PushStyleColor(ImGuiCol_Text, accent);
+        node_open = ImGui::TreeNodeEx((void*)(intptr_t)node_id, node_flags, "%s", "");
+        itemClicked = ImGui::IsItemClicked();
+        itemToggledOpen = ImGui::IsItemToggledOpen();
+        itemIsFocused = ImGui::IsItemFocused();
+        ImGui::SameLine(0.0f, 0.0f);
+        PushSolid();
+        ImGui::TextUnformatted("\xEF\x82\xAD");  // U+F0AD wrench
+        Pop();
+        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+        ImGui::TextUnformatted(navTitle);
         ImGui::PopStyleColor();
     } else {
         node_open = ImGui::TreeNodeEx((void*)(intptr_t)node_id, node_flags, "%s", navTitle);
@@ -768,7 +796,7 @@ void UI::RenderConfigWindow() {
                     fontLabels.push_back(f.c_str());
                 }
 
-                ImGui::Text("Font");
+                ImGui::Text(Translations::Get("Settings.Font"));
                 if (ImGui::Combo("##FontCombo", &selectedFontIdx, fontLabels.data(),
                                  static_cast<int>(fontLabels.size()))) {
                     Config::PrimaryFont = availableFonts[selectedFontIdx];
@@ -802,8 +830,13 @@ void UI::RenderConfigWindow() {
         // the top, -1 = bottom. Applied on the next PauseMenu open (the row is
         // injected fresh each time the pause menu loads).
         {
-            const char* posNames[] = { "Top", "2nd from top", "3rd from top",
-                                       "4th from top", "5th from top", "Bottom" };
+            const char* posNames[] = {
+                Translations::Get("Settings.PauseButtonPos.Top"),
+                Translations::Get("Settings.PauseButtonPos.2FromTop"),
+                Translations::Get("Settings.PauseButtonPos.3FromTop"),
+                Translations::Get("Settings.PauseButtonPos.4FromTop"),
+                Translations::Get("Settings.PauseButtonPos.5FromTop"),
+                Translations::Get("Settings.PauseButtonPos.Bottom") };
             const int posValues[] = { 0, 1, 2, 3, 4, -1 };
             int currentPosIdx = 0;
             for (int i = 0; i < IM_ARRAYSIZE(posValues); ++i) {
@@ -812,19 +845,22 @@ void UI::RenderConfigWindow() {
                     break;
                 }
             }
-            ImGui::Text("Pause Menu Button Position");
+            ImGui::Text(Translations::Get("Settings.PauseButtonPos"));
             if (ImGui::Combo("##PauseMenuButtonPosCombo", &currentPosIdx, posNames,
                              IM_ARRAYSIZE(posNames))) {
                 Config::PauseMenuButtonPos = posValues[currentPosIdx];
                 Config::Save();
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Where the F4SE FRAMEWORK entry appears in the pause menu list.\n"
-                                  "Takes effect the next time the pause menu opens.");
+                ImGui::SetTooltip("%s", Translations::Get("Settings.PauseButtonPos.Tooltip"));
             }
         }
 
-        const char* togleModeNames[] = {"SINGLEPRESS", "HOLD", "DOUBLEPRESS", "OFF"};
+        const char* togleModeNames[] = {
+            Translations::Get("Settings.ToggleMode.SinglePress"),
+            Translations::Get("Settings.ToggleMode.Hold"),
+            Translations::Get("Settings.ToggleMode.DoublePress"),
+            Translations::Get("Settings.ToggleMode.Off") };
         int currentTogleMode = static_cast<int>(Config::ToggleMode);
         ImGui::Text(Translations::Get("Settings.ToggleMode.Keyboard"));
         if (ImGui::Combo("##ToggleModeCombo", &currentTogleMode, togleModeNames, IM_ARRAYSIZE(togleModeNames))) {
@@ -914,13 +950,17 @@ void UI::RenderConfigWindow() {
         // --- MCM Compatibility Section ---
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::Text("MCM Compatibility");
+        ImGui::Text(Translations::Get("Settings.MCMCompat.Header"));
         ImGui::Spacing();
 
         // Deferred one frame so OpenPopup runs in the same ID scope every time.
         static bool s_mcmRestartPopupPending = false;
+        // Popup id: visible title is translated, "##MCMCompat" keeps Open/Begin
+        // referring to the same popup within a language.
+        const std::string mcmRestartPopupId =
+            std::string(Translations::Get("Settings.MCMCompat.RestartTitle")) + "##MCMCompat";
 
-        if (ToggleButton("Enable MCM Compatibility Layer", &Config::MCMCompatEnabled)) {
+        if (ToggleButton(Translations::Get("Settings.MCMCompat.Enable"), &Config::MCMCompatEnabled)) {
             Config::Save();
             // Warn that the layer only (re)initializes during game startup.
             if (Config::MCMCompatEnabled) {
@@ -941,26 +981,26 @@ void UI::RenderConfigWindow() {
         }
         mcmToggleHovered |= ImGui::IsItemHovered();
         if (mcmToggleHovered) {
-            ImGui::SetTooltip("Translates installed MCM mod configs into F4SE Menu pages.\nRequires game restart to take effect when toggled.");
+            ImGui::SetTooltip("%s", Translations::Get("Settings.MCMCompat.Enable.Tooltip"));
         }
 
         if (s_mcmRestartPopupPending) {
-            ImGui::OpenPopup("Restart Required##MCMCompat");
+            ImGui::OpenPopup(mcmRestartPopupId.c_str());
             s_mcmRestartPopupPending = false;
         }
         // Center the modal over the viewport
         ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2{0.5f, 0.5f});
-        if (ImGui::BeginPopupModal("Restart Required##MCMCompat", nullptr,
+        if (ImGui::BeginPopupModal(mcmRestartPopupId.c_str(), nullptr,
                                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
-            ImGui::TextWrapped("The MCM compatibility layer scans and translates MCM mod configs during game startup.");
+            ImGui::TextWrapped("%s", Translations::Get("Settings.MCMCompat.RestartBody1"));
             ImGui::Spacing();
-            ImGui::TextWrapped("Restart the game for the MCM Mod Configs (Legacy) pages to appear.");
+            ImGui::TextWrapped("%s", Translations::Get("Settings.MCMCompat.RestartBody2"));
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
             float btnWidth = 120.0f;
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
-            if (ImGui::Button("OK", ImVec2(btnWidth, 0))) {
+            if (ImGui::Button(Translations::Get("Common.OK"), ImVec2(btnWidth, 0))) {
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -970,43 +1010,53 @@ void UI::RenderConfigWindow() {
         // Coexistence is ON by default: translated pages load next to the real
         // MCM (keybind dispatch stays suppressed so nothing runs twice).
         if (MCMConflictCheck::IsNativeMCMPresent()) {
-            if (ToggleButton("Load MCM Mod Configs (Legacy) Even With MCM Installed", &Config::MCMCompatWhenNativePresent)) {
+            if (ToggleButton(Translations::Get("Settings.MCMCompat.LoadLegacy"), &Config::MCMCompatWhenNativePresent)) {
                 Config::Save();
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("The original MCM plugin is installed. By default this framework\n"
-                                  "also shows its own MCM Mod Configs (Legacy) pages alongside it\n"
-                                  "(both write the same setting files; hotkey actions only fire once).\n"
-                                  "Disable to let the original MCM be the only settings UI.\n"
-                                  "Requires game restart to take effect.");
+                ImGui::SetTooltip("%s", Translations::Get("Settings.MCMCompat.LoadLegacy.Tooltip"));
+            }
+        }
+
+        // Native category editor visibility. Only worth offering while the
+        // original m8r MCM Categorizer mod is installed — its page already
+        // opens our editor, so the standalone "Edit Categories" entry is
+        // hidden by default to avoid two doors to the same tool.
+        if (MCMCategorizerPage::IsLegacyModInstalled()) {
+            if (ToggleButton(Translations::Get("Settings.MCMCompat.ShowEditor"),
+                             &Config::ShowCategorizerEditorAlways)) {
+                Config::Save();
+                MCMWidgetRenderer::QueueSectionTreeRebuild();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", Translations::Get("Settings.MCMCompat.ShowEditor.Tooltip"));
             }
         }
 
         // --- Gamepad Section ---
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::Text("Gamepad");
+        ImGui::Text(Translations::Get("Settings.Gamepad.Header"));
         ImGui::Spacing();
 
         ImGui::PushItemWidth(contentWidth);
-        const char* glyphStyleNames[] = { "Xbox", "PlayStation" };
-        ImGui::Text("Button Glyph Style");
+        const char* glyphStyleNames[] = {
+            Translations::Get("Settings.Gamepad.GlyphStyle.Xbox"),
+            Translations::Get("Settings.Gamepad.GlyphStyle.PlayStation") };
+        ImGui::Text(Translations::Get("Settings.Gamepad.GlyphStyle"));
         if (ImGui::Combo("##GamepadGlyphStyleCombo", &Config::GamepadGlyphStyle,
                          glyphStyleNames, IM_ARRAYSIZE(glyphStyleNames))) {
             Config::Save();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Which controller button art the hint bar uses.");
+            ImGui::SetTooltip("%s", Translations::Get("Settings.Gamepad.GlyphStyle.Tooltip"));
         }
 
-        if (ToggleButton("Disable Keyboard Input While Using Gamepad", &Config::DisableKeyboardWithGamepad)) {
+        if (ToggleButton(Translations::Get("Settings.Gamepad.DisableKeyboard"), &Config::DisableKeyboardWithGamepad)) {
             Config::Save();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("While a controller is connected, the menu ignores keyboard input so\n"
-                              "stray key events can't fight controller navigation.\n"
-                              "Setting a keybind still reads the keyboard, and the menu\n"
-                              "toggle key and ESC (close menu) keep working.");
+            ImGui::SetTooltip("%s", Translations::Get("Settings.Gamepad.DisableKeyboard.Tooltip"));
         }
         ImGui::PopItemWidth();
 

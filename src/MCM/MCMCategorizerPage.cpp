@@ -44,12 +44,32 @@ namespace MCMCategorizerPage {
     // Constants
     // ------------------------------------------------------------------
 
+    // --- Legacy m8r "MCM Categorizer" locations (Nexus 66311) ---
+    // Read once to import a user's existing setup and (transitionally) for the
+    // translation folder. The mod itself is no longer required to be installed.
     static constexpr const char* kModFolder = "MCMCategorizer";
     static constexpr const char* kCategoriesKey = "sCategories:MCMCategorizer";
     static constexpr const char* kOrderNamesKey = "sOrderModNames:MCMCategorizer";
-    static constexpr const char* kOrderMod = "MCM";
+    static constexpr const char* kOrderMod = "MCM";        // MCM's own display order
     static constexpr const char* kOrderKey = "sOrder:Main";
     static constexpr const char* kMarkerPrefix = "__CAT_";
+
+    // --- Framework-owned private store ---
+    // The model persists here instead of round-tripping through MCM's own
+    // settings. This INI is not a registered MCM config, so the MCM Settings
+    // Manager never enumerates it — the data can no longer feed the Flash
+    // Settings Manager's stack-overflow-on-save. Keys mirror the legacy names
+    // (m8rQckSer array for sCategories, marker+folder CSV for sOrder) so the
+    // stored data stays inspectable and importable.
+    static constexpr const char* kStoreMod = "F4SEMenuFrameworkCategories";
+    static constexpr const char* kStoreCatKey = "sCategories:Main";
+    static constexpr const char* kStoreOrderKey = "sOrder:Main";
+    static constexpr const char* kStoreOrderNamesKey = "sOrderModNames:Main";
+    static constexpr const char* kStoreEnabledKey = "bEnabled:Main";
+    static constexpr const char* kStoreWrapKey = "bFolderWrap:Main";
+    static constexpr const char* kStoreBeforeKey = "sWrapBefore:Main";
+    static constexpr const char* kStoreAfterKey = "sWrapAfter:Main";
+    static constexpr const char* kStoreImportedKey = "bImported:Main";
 
     // ------------------------------------------------------------------
     // Translations (Data/MCM/Config/MCMCategorizer/Translation/)
@@ -91,7 +111,6 @@ namespace MCMCategorizerPage {
 
     struct Session {
         bool loaded = false;
-        bool installed = false;
         bool corrupt = false;   // sCategories present but unparseable — read-only mode
 
         // Nav labels of all active categories (what CategoryLabelFor emits),
@@ -245,20 +264,49 @@ namespace MCMCategorizerPage {
         }
     }
 
+    static void WriteStore();        // persist the model into the private store
+    static void CleanLegacyOrder();  // neutralize leftover categorized MCM order
+
+    // Where the current load reads from: our private store once the data has
+    // been migrated, otherwise the legacy m8r settings (a one-time import).
+    static bool IsMigrated() {
+        return GetRaw(kStoreMod, kStoreImportedKey) == "1";
+    }
+
+    // True while the m8r "MCM Categorizer" mod is still installed. We only take
+    // ownership (migrate to the private store, stop writing MCM/sOrder:Main)
+    // once it is GONE — while it is present we stay a pass-through over the
+    // live MCM settings so the Flash editor and our UI keep sharing one copy
+    // of the data (no fork), exactly as before this became a replacement.
+    static bool LegacyModInstalled() {
+        std::error_code ec;
+        return fs::exists(MCMScanner::GetScanBasePath() / kModFolder / "config.json", ec);
+    }
+
     static void EnsureLoaded() {
         if (s.loaded) return;
         s.loaded = true;
 
-        std::error_code ec;
-        s.installed = fs::exists(MCMScanner::GetScanBasePath() / kModFolder / "config.json", ec);
-        if (!s.installed) return;
+        const bool migrated = IsMigrated();
 
-        // Style settings (bEnabled default is 1 per the shipped settings.ini,
-        // which GetModSettingRaw layers underneath the user file).
-        s.rawEnabled = GetRaw(kModFolder, "bEnabled:MCMCategorizer");
-        s.rawWrap = GetRaw(kModFolder, "bFolderWrap:MCMCategorizer");
-        s.rawBefore = GetRaw(kModFolder, "sWrapBefore:MCMCategorizer");
-        s.rawAfter = GetRaw(kModFolder, "sWrapAfter:MCMCategorizer");
+        // Pick the read source. Style bEnabled defaults to 1 (matching the
+        // m8r mod's shipped settings.ini); wrap chars default to guillemets.
+        if (migrated) {
+            s.rawEnabled = GetRaw(kStoreMod, kStoreEnabledKey);
+            s.rawWrap = GetRaw(kStoreMod, kStoreWrapKey);
+            s.rawBefore = GetRaw(kStoreMod, kStoreBeforeKey);
+            s.rawAfter = GetRaw(kStoreMod, kStoreAfterKey);
+            s.rawCategories = GetRaw(kStoreMod, kStoreCatKey);
+            s.rawOrder = GetRaw(kStoreMod, kStoreOrderKey);
+        } else {
+            s.rawEnabled = GetRaw(kModFolder, "bEnabled:MCMCategorizer");
+            s.rawWrap = GetRaw(kModFolder, "bFolderWrap:MCMCategorizer");
+            s.rawBefore = GetRaw(kModFolder, "sWrapBefore:MCMCategorizer");
+            s.rawAfter = GetRaw(kModFolder, "sWrapAfter:MCMCategorizer");
+            s.rawCategories = GetRaw(kModFolder, kCategoriesKey);
+            s.rawOrder = GetRaw(kOrderMod, kOrderKey);
+        }
+
         s.enabled = s.rawEnabled.empty() || s.rawEnabled == "1" || s.rawEnabled == "true";
         s.folderWrap = s.rawWrap.empty() || s.rawWrap == "1" || s.rawWrap == "true";
         s.wrapBefore = s.rawBefore;
@@ -267,7 +315,6 @@ namespace MCMCategorizerPage {
         if (!IsValidUtf8(s.wrapAfter)) s.wrapAfter = "\xC2\xBB";    // »
 
         // Categories
-        s.rawCategories = GetRaw(kModFolder, kCategoriesKey);
         s.categories.clear();
         if (!s.rawCategories.empty()) {
             auto parsed = M8rQckSer::Parse(s.rawCategories);
@@ -315,8 +362,8 @@ namespace MCMCategorizerPage {
             }
         }
 
-        // Order (authoritative: MCM's sOrder:Main — folder names + markers).
-        s.rawOrder = GetRaw(kOrderMod, kOrderKey);
+        // Order (folder names + "__CAT_<id>" markers). Read above from the
+        // store or, pre-migration, from MCM's own sOrder:Main.
         std::vector<std::string> orderVec;
         {
             size_t start = 0;
@@ -393,17 +440,53 @@ namespace MCMCategorizerPage {
                 s.navLabels.insert(NavLabelForCategory(c));
             }
         }
+
+        // One-time migration: once the m8r mod is GONE, copy a user's existing
+        // setup into our private store and neutralize the leftover categorized
+        // MCM/sOrder:Main so it can no longer feed the abandoned Settings
+        // Manager's crash. While the m8r mod is still installed we deliberately
+        // do NOT migrate — we stay a pass-through over its live settings so its
+        // Flash editor and our UI share one copy (see WriteLegacy). A fresh
+        // install with no legacy data just starts empty; the first editor
+        // Save() stamps the flag.
+        if (!migrated && !s.corrupt && !LegacyModInstalled()) {
+            const bool hasLegacyData =
+                !s.rawCategories.empty() || s.rawOrder.find(kMarkerPrefix) != std::string::npos;
+            if (hasLegacyData) {
+                WriteStore();  // seeds the store from the imported model, stamps kStoreImportedKey
+
+                // Re-point the change-detection snapshots at what we just wrote
+                // (WriteStore re-stringifies, so the store bytes differ from the
+                // legacy raw values) — otherwise the first NavDataChanged would
+                // see a false change and force a redundant tree rebuild.
+                s.rawCategories = GetRaw(kStoreMod, kStoreCatKey);
+                s.rawOrder = GetRaw(kStoreMod, kStoreOrderKey);
+                s.rawEnabled = GetRaw(kStoreMod, kStoreEnabledKey);
+                s.rawWrap = GetRaw(kStoreMod, kStoreWrapKey);
+                s.rawBefore = GetRaw(kStoreMod, kStoreBeforeKey);
+                s.rawAfter = GetRaw(kStoreMod, kStoreAfterKey);
+
+                CleanLegacyOrder();
+                logger::info("[MCMCategorizer] Imported legacy categorizer data into the "
+                             "framework store ({} categories) and neutralized the leftover "
+                             "MCM order", s.categories.size());
+            }
+        }
     }
 
     // ------------------------------------------------------------------
     // Persistence (port of saveCategories + writeOrder)
     // ------------------------------------------------------------------
 
-    static void Save() {
-        if (s.corrupt) return;  // never overwrite data we could not read
-
-        // sCategories — category array in m8rQckSer plain encoding, key order
-        // matching CategoryService.addCategory ({name, mods, id, dirName}).
+    // Serializes the current model into the three legacy-format strings shared
+    // by both persistence paths: sCategories (m8rQckSer array, key order
+    // matching CategoryService.addCategory {name, mods, id, dirName}), the
+    // expanded order of folder names + "__CAT_<id>" markers, and its config-
+    // modName mirror (writeOrder). Single source of truth so the store and the
+    // legacy paths can never drift.
+    static void SerializeModel(std::string& outCats,
+                               std::string& outOrderDirs,
+                               std::string& outOrderNames) {
         M8rQckSer::Value root = M8rQckSer::Value::MakeArray();
         for (const auto& c : s.categories) {
             M8rQckSer::Value cat = M8rQckSer::Value::MakeObject();
@@ -417,11 +500,10 @@ namespace MCMCategorizerPage {
             cat.object.emplace_back("dirName", M8rQckSer::Value::MakeString(c.marker));
             root.array.push_back(std::move(cat));
         }
-        SetStringSetting(kModFolder, kCategoriesKey, M8rQckSer::Stringify(root));
+        outCats = M8rQckSer::Stringify(root);
 
-        // Order — expanded normalized sequence. sOrder:Main gets folder
-        // names; sOrderModNames mirrors it with config modNames (writeOrder).
-        std::string orderDirs, orderNames;
+        outOrderDirs.clear();
+        outOrderNames.clear();
         auto append = [](std::string& csv, const std::string& v) {
             if (!csv.empty()) csv.push_back(',');
             csv += v;
@@ -429,20 +511,104 @@ namespace MCMCategorizerPage {
         for (const auto& item : s.items) {
             if (item.isCategory) {
                 const Category& c = s.categories[item.cat];
-                append(orderDirs, c.marker);
-                append(orderNames, c.marker);
+                append(outOrderDirs, c.marker);
+                append(outOrderNames, c.marker);
                 for (const auto& key : c.members) {
-                    append(orderDirs, key);
-                    append(orderNames, ConfigNameForKey(key));
+                    append(outOrderDirs, key);
+                    append(outOrderNames, ConfigNameForKey(key));
                 }
             } else {
-                append(orderDirs, item.modKey);
-                append(orderNames, ConfigNameForKey(item.modKey));
+                append(outOrderDirs, item.modKey);
+                append(outOrderNames, ConfigNameForKey(item.modKey));
             }
         }
+    }
+
+    // Writes the in-memory model into the framework's PRIVATE store only.
+    // Deliberately never touches MCM/sOrder:Main — that write is what fed the
+    // Settings Manager crash. Uses the raw provider path (no live-MCM mirror):
+    // nothing outside the framework reads our store. Stamps kStoreImportedKey
+    // so all later loads read the store, not the legacy source.
+    static void WriteStore() {
+        std::string cats, orderDirs, orderNames;
+        SerializeModel(cats, orderDirs, orderNames);
+        MCMValueProvider::SetModSettingRaw(kStoreMod, kStoreCatKey, cats);
+        MCMValueProvider::SetModSettingRaw(kStoreMod, kStoreOrderKey, orderDirs);
+        MCMValueProvider::SetModSettingRaw(kStoreMod, kStoreOrderNamesKey, orderNames);
+        // Style settings live in the store too now (the m8r page that used to
+        // host them may be gone).
+        MCMValueProvider::SetModSettingRaw(kStoreMod, kStoreEnabledKey, s.enabled ? "1" : "0");
+        MCMValueProvider::SetModSettingRaw(kStoreMod, kStoreWrapKey, s.folderWrap ? "1" : "0");
+        MCMValueProvider::SetModSettingRaw(kStoreMod, kStoreBeforeKey, s.wrapBefore);
+        MCMValueProvider::SetModSettingRaw(kStoreMod, kStoreAfterKey, s.wrapAfter);
+        MCMValueProvider::SetModSettingRaw(kStoreMod, kStoreImportedKey, "1");
+        MCMValueProvider::FlushAll();
+    }
+
+    // Rewrites the leftover MCM/sOrder:Main without any "__CAT_<id>" markers,
+    // preserving the flat mod order, and clears the m8r categorizer's own
+    // setting footprint. Called during migration only when the m8r mod is
+    // absent (so we do not fight a still-installed Flash categorizer). Uses
+    // the TYPED path for MCM/sOrder:Main so the live MCM store is updated too
+    // and cannot re-persist the categorized value on its next save.
+    static void CleanLegacyOrder() {
+        std::string flat;
+        size_t start = 0;
+        while (start <= s.rawOrder.size() && !s.rawOrder.empty()) {
+            size_t comma = s.rawOrder.find(',', start);
+            std::string tok = comma == std::string::npos
+                                  ? s.rawOrder.substr(start)
+                                  : s.rawOrder.substr(start, comma - start);
+            if (!tok.empty() && !IsMarker(tok)) {
+                if (!flat.empty()) flat.push_back(',');
+                flat += tok;
+            }
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+        SetStringSetting(kOrderMod, kOrderKey, flat);
+        // The mod is gone; blank its lingering user-settings values so a
+        // reinstall (or the Settings Manager) never re-reads the old markers.
+        MCMValueProvider::SetModSettingRaw(kModFolder, kCategoriesKey, "");
+        MCMValueProvider::SetModSettingRaw(kModFolder, kOrderNamesKey, "");
+        MCMValueProvider::FlushAll();
+    }
+
+    // Writes the model back to the LEGACY m8r settings (sCategories, MCM's
+    // sOrder:Main, sOrderModNames) with the live-MCM mirror on the STRING
+    // data, so edits made while the m8r mod is still installed stay in sync
+    // with its Flash editor. This is the pre-migration path and the only place
+    // we still touch MCM/sOrder:Main — it disappears the moment the m8r mod is
+    // removed.
+    static void WriteLegacy() {
+        std::string cats, orderDirs, orderNames;
+        SerializeModel(cats, orderDirs, orderNames);
+        SetStringSetting(kModFolder, kCategoriesKey, cats);
         SetStringSetting(kOrderMod, kOrderKey, orderDirs);
         SetStringSetting(kModFolder, kOrderNamesKey, orderNames);
+        // Style settings go to disk RAW — never through the Papyrus mirror.
+        // bEnabled/bFolderWrap are BOOL settings in MCM; mirroring them via
+        // MCM.SetModSettingString (a string native) makes mcm.dll dereference
+        // an invalid pointer and AV (crash-2026-08-30-12-29-23). The m8r page
+        // re-reads these from disk when it next opens; that is enough.
+        MCMValueProvider::SetModSettingRaw(kModFolder, "bEnabled:MCMCategorizer", s.enabled ? "1" : "0");
+        MCMValueProvider::SetModSettingRaw(kModFolder, "bFolderWrap:MCMCategorizer", s.folderWrap ? "1" : "0");
+        MCMValueProvider::SetModSettingRaw(kModFolder, "sWrapBefore:MCMCategorizer", s.wrapBefore);
+        MCMValueProvider::SetModSettingRaw(kModFolder, "sWrapAfter:MCMCategorizer", s.wrapAfter);
         MCMValueProvider::FlushAll();
+    }
+
+    static void Save() {
+        if (s.corrupt) return;  // never overwrite data we could not read
+
+        // Own the data once migrated, or once the m8r mod is gone (a first
+        // edit before the menu was ever opened post-removal). Otherwise stay
+        // in sync with the still-installed Flash editor via the legacy path.
+        if (IsMigrated() || !LegacyModInstalled()) {
+            WriteStore();
+        } else {
+            WriteLegacy();
+        }
 
         logger::info("[MCMCategorizer] Saved {} categories, {} order entries",
                      s.categories.size(), s.items.size());
@@ -459,12 +625,12 @@ namespace MCMCategorizerPage {
 
     bool CategorizationActive() {
         EnsureLoaded();
-        return s.installed && s.enabled && !s.corrupt && !s.categories.empty();
+        return s.enabled && !s.corrupt && !s.categories.empty();
     }
 
     std::string CategoryLabelFor(const std::string& configModName) {
         EnsureLoaded();
-        if (!s.installed || !s.enabled || s.corrupt) return "";
+        if (!s.enabled || s.corrupt) return "";
         const auto it = s_byConfigName.find(configModName);
         const std::string key = it != s_byConfigName.end() ? it->second->folder : configModName;
         const auto mIt = s.memberOf.find(key);
@@ -475,7 +641,7 @@ namespace MCMCategorizerPage {
 
     int OrderIndexFor(const std::string& folderName) {
         EnsureLoaded();
-        if (!s.installed || !s.enabled || s.corrupt) return INT_MAX;
+        if (!s.enabled || s.corrupt) return INT_MAX;
         const auto it = s.orderIndex.find(folderName);
         return it != s.orderIndex.end() ? it->second : INT_MAX;
     }
@@ -491,18 +657,45 @@ namespace MCMCategorizerPage {
     }
 
     bool NavDataChanged() {
-        if (!s.loaded || !s.installed) return false;
-        const bool changed =
-            GetRaw(kModFolder, "bEnabled:MCMCategorizer") != s.rawEnabled ||
-            GetRaw(kModFolder, "bFolderWrap:MCMCategorizer") != s.rawWrap ||
-            GetRaw(kModFolder, "sWrapBefore:MCMCategorizer") != s.rawBefore ||
-            GetRaw(kModFolder, "sWrapAfter:MCMCategorizer") != s.rawAfter ||
-            GetRaw(kModFolder, kCategoriesKey) != s.rawCategories ||
-            GetRaw(kOrderMod, kOrderKey) != s.rawOrder;
+        if (!s.loaded) return false;
+        // Compare against whichever source the current state was loaded from.
+        // Once migrated only our own editor writes the store (and it rebuilds
+        // the tree itself), so this effectively guards the transitional case
+        // where the m8r Flash page's style switchers are still editable.
+        bool changed;
+        if (IsMigrated()) {
+            changed =
+                GetRaw(kStoreMod, kStoreEnabledKey) != s.rawEnabled ||
+                GetRaw(kStoreMod, kStoreWrapKey) != s.rawWrap ||
+                GetRaw(kStoreMod, kStoreBeforeKey) != s.rawBefore ||
+                GetRaw(kStoreMod, kStoreAfterKey) != s.rawAfter ||
+                GetRaw(kStoreMod, kStoreCatKey) != s.rawCategories ||
+                GetRaw(kStoreMod, kStoreOrderKey) != s.rawOrder;
+        } else {
+            changed =
+                GetRaw(kModFolder, "bEnabled:MCMCategorizer") != s.rawEnabled ||
+                GetRaw(kModFolder, "bFolderWrap:MCMCategorizer") != s.rawWrap ||
+                GetRaw(kModFolder, "sWrapBefore:MCMCategorizer") != s.rawBefore ||
+                GetRaw(kModFolder, "sWrapAfter:MCMCategorizer") != s.rawAfter ||
+                GetRaw(kModFolder, kCategoriesKey) != s.rawCategories ||
+                GetRaw(kOrderMod, kOrderKey) != s.rawOrder;
+        }
         if (changed) {
             ResetSession();  // rebuilt from fresh data by the queued rebuild
         }
         return changed;
+    }
+
+    // Display name of the m8r categorizer's own MCM page (config.json
+    // "displayName") — the node the framework pins at the top of the list.
+    static constexpr const char* kLegacyPageLabel = "MCM Categorizer";
+
+    bool IsLegacyModInstalled() {
+        return LegacyModInstalled();
+    }
+
+    bool IsCategorizerToolNavLabel(const std::string& nodeName) {
+        return nodeName == kEditorNavLabel || nodeName == kLegacyPageLabel;
     }
 
     // ------------------------------------------------------------------
@@ -530,13 +723,17 @@ namespace MCMCategorizerPage {
     struct PendingAction {
         enum class Kind {
             None, AddCategory, RenameCategory, DeleteCategory, SortCategory,
-            MoveItem, MoveMember, RemoveMember, AssignMember, SortAll, DragDrop
+            MoveItem, MoveMember, RemoveMember, AssignMember, SortAll, DragDrop,
+            SetStyle
         };
         Kind kind = Kind::None;
         size_t a = 0, b = 0;   // indexes (item/category/member as needed)
         int dir = 0;           // -1 up / +1 down
-        std::string text;      // new name for Add/Rename
+        std::string text;      // new name for Add/Rename; wrapBefore for SetStyle
         DragRef src, dst;      // DragDrop only
+        bool flag0 = false;    // SetStyle: enabled
+        bool flag1 = false;    // SetStyle: folderWrap
+        std::string text2;     // SetStyle: wrapAfter
     };
 
     // Editor UI state (survives ResetSession on purpose — popups stay open
@@ -726,6 +923,14 @@ namespace MCMCategorizerPage {
                 }
                 break;
             }
+            case K::SetStyle:
+                s.enabled = act.flag0;
+                s.folderWrap = act.flag1;
+                s.wrapBefore = act.text;
+                s.wrapAfter = act.text2;
+                if (!IsValidUtf8(s.wrapBefore)) s.wrapBefore = "\xC2\xAB";  // «
+                if (!IsValidUtf8(s.wrapAfter)) s.wrapAfter = "\xC2\xBB";    // »
+                break;
             case K::None:
                 return;
         }
@@ -843,14 +1048,23 @@ namespace MCMCategorizerPage {
         return dir;
     }
 
+    // Transitional entry point: the m8r categorizer's own MCM page hijacks
+    // its Flash editor control and renders ours instead. Only reachable while
+    // that mod is installed — the standalone nav entry uses RenderEditor().
     void RenderImageControl(const std::string&, const std::string&) {
+        RenderEditor();
+    }
+
+    void RenderEditor() {
         EnsureLoaded();
 
         if (s.corrupt) {
             ImGui::TextWrapped("The saved category data (sCategories) could not be parsed. "
                                "Categorization is disabled and this editor is read-only so the "
                                "data is not overwritten. Fix or clear the value in "
-                               "Data/MCM/Settings/MCMCategorizer.ini to start over.");
+                               "Data/MCM/Settings/F4SEMenuFrameworkCategories.ini (or the "
+                               "original Data/MCM/Settings/MCMCategorizer.ini before migration) "
+                               "to start over.");
             return;
         }
 
@@ -866,12 +1080,52 @@ namespace MCMCategorizerPage {
         if (ImGui::Button(Tr("$SortByName").c_str())) {
             s_openSortAll = true;
         }
-        if (!s.enabled) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("(%s: OFF)", Tr("$EnableCategorization").c_str());
-        }
         ImGui::SameLine();
         ImGui::TextDisabled("Drag rows to move or reorder (arrows work too)");
+
+        // Style row — these lived on the m8r categorizer's MCM page, which may
+        // now be gone, so the standalone editor owns them. Commit text on
+        // deactivation (not per keystroke) to avoid a save+regroup each frame.
+        {
+            bool enabled = s.enabled;
+            bool wrap = s.folderWrap;
+            char beforeBuf[32] = {};
+            char afterBuf[32] = {};
+            std::snprintf(beforeBuf, sizeof(beforeBuf), "%s", s.wrapBefore.c_str());
+            std::snprintf(afterBuf, sizeof(afterBuf), "%s", s.wrapAfter.c_str());
+
+            bool styleChanged = false;
+            if (ImGui::Checkbox(Tr("$EnableCategorization").c_str(), &enabled)) styleChanged = true;
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Group the MCM menu list into your categories. "
+                                  "Off shows a flat, uncategorized list.");
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!enabled);
+            if (ImGui::Checkbox(Tr("$WrapCategoryName").c_str(), &wrap)) styleChanged = true;
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Wrap category folder names with the characters below.");
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(48.0f);
+            ImGui::BeginDisabled(!wrap);
+            ImGui::InputText("##wrapBefore", beforeBuf, sizeof(beforeBuf));
+            if (ImGui::IsItemDeactivatedAfterEdit()) styleChanged = true;
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(48.0f);
+            ImGui::InputText("##wrapAfter", afterBuf, sizeof(afterBuf));
+            if (ImGui::IsItemDeactivatedAfterEdit()) styleChanged = true;
+            ImGui::EndDisabled();
+            ImGui::EndDisabled();
+
+            if (styleChanged) {
+                act.kind = PendingAction::Kind::SetStyle;
+                act.flag0 = enabled;
+                act.flag1 = wrap;
+                act.text = beforeBuf;
+                act.text2 = afterBuf;
+            }
+        }
         ImGui::Separator();
 
         // Category / mod list

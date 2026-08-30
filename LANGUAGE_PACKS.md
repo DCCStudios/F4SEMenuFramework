@@ -186,6 +186,36 @@ English comes from the mod itself. Your pack is usually just `es.json` (or whate
 
 ---
 
+## Translating the framework's own menu
+
+Everything above is for translating other mods' pages. The framework's **own** menu (the "Mod Control Panel" title, the Options menu, the whole **Settings** window including the **MCM Compatibility** and **Gamepad** sections, the keybind mode labels like `HOLD`, and the pause-menu placement dropdown) is a separate file:
+
+```
+Data/F4SE/Plugins/F4SEMenuFrameworkStrings.json
+```
+
+It works differently from a language pack. There is only **one** file, and it ships in English. The keys are **stable IDs**, not the English text:
+
+```json
+{
+  "Settings.Gamepad.Header": "Gamepad",
+  "Settings.Gamepad.DisableKeyboard": "Disable Keyboard Input While Using Gamepad",
+  "Settings.ToggleMode.Hold": "HOLD"
+}
+```
+
+To localize the menu, edit the **values** (right side) in place and ship the edited file over the original. Leave the keys (left side) exactly as they are.
+
+Rules:
+
+- **Every** visible string in the Settings menu now has a key here, so the whole menu can be translated. If you translated this file before and part of the menu stayed English, that was because those strings were hardcoded; they are keys now.
+- A key that is present but missing from the file renders as the literal text `missing translation`. Keep every key in the file, even the ones you do not translate yet.
+- `\n` inside a value is a line break. The multi-line tooltip values use it; keep the `\n` where it is and translate around it.
+- The keys `Options` and a few others contain a Font Awesome glyph escape such as `` (a caret). Leave those escapes untouched.
+- This file is not language-code based (no `es.json`). It replaces the shipped English file directly, so a pack for it is a small mod that overwrites `F4SEMenuFrameworkStrings.json`.
+
+---
+
 ## For mod authors (short)
 
 You usually do nothing. Automatic translation already covers ImGui text your plugin draws through the framework. If you want ID-style keys (`"Option.Enable"`) or strings built outside ImGui, use the `Translate()` API documented in [PLUGIN_DEVELOPMENT_GUIDE.md](PLUGIN_DEVELOPMENT_GUIDE.md) section 12.

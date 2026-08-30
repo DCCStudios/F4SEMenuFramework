@@ -28,6 +28,13 @@ class Config {
     static bool MCMCompatEnabled;
     static bool MCMCompatWhenNativePresent;
 
+    // Show the native "Edit Categories" entry even when the original m8r
+    // MCM Categorizer mod is installed. Off by default: while that mod is
+    // present its own page already opens our editor, so the extra entry is
+    // hidden to avoid two doors to the same tool. With the mod removed, the
+    // entry always shows regardless of this setting (it is the only door).
+    static bool ShowCategorizerEditorAlways;
+
     // Gamepad UX: which button glyph art the hint bar uses.
     // 0 = Xbox (default), 1 = PlayStation.
     static int GamepadGlyphStyle;

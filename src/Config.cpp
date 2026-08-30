@@ -22,6 +22,7 @@ float Config::FontSizeMedium = 32.0f;
 float Config::FontSizeBig = 64.0f;
 bool Config::MCMCompatEnabled = true;
 bool Config::MCMCompatWhenNativePresent = true;
+bool Config::ShowCategorizerEditorAlways = false;
 int Config::GamepadGlyphStyle = 0;
 bool Config::DisableKeyboardWithGamepad = false;
 int Config::PauseMenuButtonPos = 0;
@@ -77,6 +78,7 @@ void Config::Init() {
     ini->SetSection("MCMCompat");
     MCMCompatEnabled = ini->GetBool("Enabled", true);
     MCMCompatWhenNativePresent = ini->GetBool("MCMCompatWhenNativePresent", true);
+    ShowCategorizerEditorAlways = ini->GetBool("ShowCategorizerEditorAlways", false);
 
     // Automatic backend translation of third-party plugin UI text.
     // AutoTranslate substitutes JSON translations transparently (safe no-op
@@ -162,6 +164,7 @@ void Config::Save() {
     ini->SetSection("MCMCompat");
     ini->SetBool("Enabled", MCMCompatEnabled);
     ini->SetBool("MCMCompatWhenNativePresent", MCMCompatWhenNativePresent);
+    ini->SetBool("ShowCategorizerEditorAlways", ShowCategorizerEditorAlways);
 
     // Localization Section
     ini->SetSection("Localization");
