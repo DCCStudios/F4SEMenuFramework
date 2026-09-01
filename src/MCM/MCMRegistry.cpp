@@ -8,6 +8,7 @@
 #include "MCM/MCMLiveSync.h"
 #include "MCM/MCMWidgetRenderer.h"
 #include "MCM/MCMTranslation.h"
+#include "PluginLocalization.h"
 #include "Config.h"
 #include "Event.h"
 #include "FontManager.h"
@@ -115,10 +116,23 @@ namespace MCMRegistry {
         // (Custom.ini first — GetINISetting alone often stays on Fallout4.ini's
         // "en" even when the player set sLanguage in Custom.ini).
         {
+            // Feed the user's language override (framework settings) into the
+            // resolver first — when set it wins over the game's sLanguage, and
+            // because plugin localization / auto-translate also call
+            // ResolveGameLanguage, this one line steers every translation path.
+            MCMTranslation::SetLanguageOverride(Config::LanguageOverride);
+
             const auto* langSetting = RE::GetINISetting("sLanguage:General");
             const std::string fromSetting = langSetting ? std::string(langSetting->GetString()) : "";
             const std::string lang = MCMTranslation::ResolveGameLanguage(fromSetting);
             MCMTranslation::SetLanguage(lang);
+            // Plugin localization resolves its language earlier (during each
+            // plugin's kPostLoad) and caches it, so by the time we set the
+            // override here it has already latched the game's language. Push the
+            // resolved language in explicitly — SetLanguage marks every plugin
+            // table stale and bumps the generation, so plugin menus reload in
+            // the chosen language instead of staying on the early-cached one.
+            PluginLocalization::SetLanguage(lang);
             logger::info("[MCMRegistry] Game language '{}' (GetINISetting reported '{}') — "
                          "loading translations with English fallback for missing keys",
                 MCMTranslation::GetLanguage(),

@@ -191,28 +191,30 @@ English comes from the mod itself. Your pack is usually just `es.json` (or whate
 Everything above is for translating other mods' pages. The framework's **own** menu (the "Mod Control Panel" title, the Options menu, the whole **Settings** window including the **MCM Compatibility** and **Gamepad** sections, the keybind mode labels like `HOLD`, and the pause-menu placement dropdown) is a separate file:
 
 ```
-Data/F4SE/Plugins/F4SEMenuFrameworkStrings.json
+Data/F4SE/Plugins/F4SEMenuFramework/F4SEMenuFrameworkStrings.json
 ```
 
-It works differently from a language pack. There is only **one** file, and it ships in English. The keys are **stable IDs**, not the English text:
+The keys are **stable IDs**, not the English text. `F4SEMenuFrameworkStrings.json` is the English base and always loads first. To add a language, ship a companion file named with the language code next to it, e.g. `F4SEMenuFrameworkStrings_es.json` (Spanish) or `F4SEMenuFrameworkStrings_de.json` (German).
+
+The framework loads the base, then overlays the file for the active language (the game's `sLanguage`, or the user's language override in Settings if set). Only the keys your file provides are replaced; anything you leave out keeps the English base, so a partial translation is fine:
 
 ```json
 {
-  "Settings.Gamepad.Header": "Gamepad",
-  "Settings.Gamepad.DisableKeyboard": "Disable Keyboard Input While Using Gamepad",
-  "Settings.ToggleMode.Hold": "HOLD"
+  "Settings.Gamepad.Header": "Mando",
+  "Settings.Gamepad.DisableKeyboard": "Desactivar el teclado mientras se usa el mando",
+  "Settings.ToggleMode.Hold": "MANTENER"
 }
 ```
 
-To localize the menu, edit the **values** (right side) in place and ship the edited file over the original. Leave the keys (left side) exactly as they are.
+The framework ships translations for German, Spanish, French, Italian, Portuguese (Brazil), Russian, Polish, Japanese, and Chinese (Simplified and Traditional). To add or improve one, drop a `F4SEMenuFrameworkStrings_<lang>.json` over it.
 
 Rules:
 
-- **Every** visible string in the Settings menu now has a key here, so the whole menu can be translated. If you translated this file before and part of the menu stayed English, that was because those strings were hardcoded; they are keys now.
-- A key that is present but missing from the file renders as the literal text `missing translation`. Keep every key in the file, even the ones you do not translate yet.
+- The language code is the same one the game uses for `sLanguage` (`es`, `de`, `ptbr`, `zhhans`, ...). The overlay file must be named `F4SEMenuFrameworkStrings_<code>.json`.
+- Because the English base loads first, any key you omit falls back to readable English — you never see `missing translation` for a partial file.
 - `\n` inside a value is a line break. The multi-line tooltip values use it; keep the `\n` where it is and translate around it.
-- The keys `Options` and a few others contain a Font Awesome glyph escape such as `` (a caret). Leave those escapes untouched.
-- This file is not language-code based (no `es.json`). It replaces the shipped English file directly, so a pack for it is a small mod that overwrites `F4SEMenuFrameworkStrings.json`.
+- The `Options` value ends with a Font Awesome caret glyph. Keep it at the end of your translation.
+- Non-Latin scripts (Cyrillic, CJK) also need the matching font enabled in Settings, or the translated text renders as boxes.
 
 ---
 

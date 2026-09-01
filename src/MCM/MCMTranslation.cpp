@@ -8,6 +8,8 @@
 #include <regex>
 #include <sstream>
 #include <algorithm>
+#include <set>
+#include <vector>
 #include <cctype>
 #include <codecvt>
 #include <locale>
@@ -47,6 +49,15 @@ namespace MCMTranslation {
 
     const std::string& GetLanguage() {
         return s_language;
+    }
+
+    // Empty = follow the game's sLanguage. When set, ResolveGameLanguage returns
+    // it instead of reading the INIs, so the whole framework translates into the
+    // chosen language regardless of the game setting.
+    static std::string s_languageOverride;
+
+    void SetLanguageOverride(const std::string& lang) {
+        s_languageOverride = NormalizeLanguage(lang);
     }
 
     // Convert a UTF-16 LE wstring to a UTF-8 std::string
@@ -89,6 +100,11 @@ namespace MCMTranslation {
     }
 
     std::string ResolveGameLanguage(const std::string& optionalSettingFallback) {
+        // A user override (set in the framework's own settings) wins over the
+        // game's sLanguage entirely.
+        if (!s_languageOverride.empty()) {
+            return s_languageOverride;
+        }
         // Custom.ini first: that is where players (and MO2 profiles) put
         // sLanguage overrides. The in-memory Setting from GetINISetting often
         // still holds Fallout4.ini's "en" even when Custom says otherwise —
@@ -105,6 +121,85 @@ namespace MCMTranslation {
             return fromSetting;
         }
         return "en";
+    }
+
+    // Known Fallout 4 (and common community) language codes with display names.
+    static const std::vector<std::pair<std::string, std::string>>& KnownLanguages() {
+        static const std::vector<std::pair<std::string, std::string>> k = {
+            { "en", "English" },       { "de", "German" },   { "es", "Spanish" },
+            { "fr", "French" }, { "it", "Italian" },
+            { "ja", "Japanese" },      { "ko", "Korean" },   { "pl", "Polish" },
+            { "ptbr", "Portuguese (Brazil)" }, { "pt", "Portuguese" },
+            { "ru", "Russian" },       { "cz", "Czech" },    { "cs", "Czech" },
+            { "zhhans", "Chinese (Simplified)" }, { "zhhant", "Chinese (Traditional)" },
+            { "zh", "Chinese" },       { "tr", "Turkish" },  { "uk", "Ukrainian" },
+            { "hu", "Hungarian" },
+        };
+        return k;
+    }
+
+    std::string LanguageDisplayName(const std::string& code) {
+        const std::string c = NormalizeLanguage(code);
+        for (const auto& [k, name] : KnownLanguages()) {
+            if (k == c) return name;
+        }
+        return code;
+    }
+
+    std::vector<std::string> GetInstalledLanguages() {
+        namespace fs = std::filesystem;
+        std::set<std::string> found;
+        found.insert("en");  // the English base ships with the framework
+
+        // Longest codes first so "esmx"/"zhhans" match before "es"/"zh".
+        std::vector<std::string> codes;
+        for (const auto& [k, name] : KnownLanguages()) codes.push_back(k);
+        std::sort(codes.begin(), codes.end(),
+                  [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+
+        auto scanName = [&](std::string name) {
+            std::transform(name.begin(), name.end(), name.begin(),
+                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            for (const auto& code : codes) {
+                // Plugin Languages files: "<code>.json". MCM/interface files:
+                // "..._<code>.txt". Framework own strings: "..._<code>.json".
+                if (name == code + ".json") { found.insert(code); return; }
+                for (const char* suffix : { ".txt", ".json" }) {
+                    const std::string suf = "_" + code + suffix;
+                    if (name.size() > suf.size() &&
+                        name.compare(name.size() - suf.size(), suf.size(), suf) == 0) {
+                        found.insert(code);
+                        return;
+                    }
+                }
+            }
+        };
+        // directory_iterator throws when a dir is absent (common) — swallow it.
+        auto safeScan = [&](const fs::path& dir) {
+            try {
+                for (const auto& e : fs::directory_iterator(dir)) {
+                    if (e.is_regular_file()) scanName(PathUtf8(e.path().filename()));
+                }
+            } catch (...) {}
+        };
+
+        safeScan("Data/Interface/Translations");
+        // Framework's own per-language files (F4SEMenuFrameworkStrings_<lang>.json)
+        // live in the framework's data folder, so a language ships selectable even
+        // with no other mod translated for it.
+        safeScan("Data/F4SE/Plugins/F4SEMenuFramework");
+        try {
+            for (const auto& mod : fs::directory_iterator("Data/MCM/Config")) {
+                if (mod.is_directory()) safeScan(mod.path() / "Translation");
+            }
+        } catch (...) {}
+        try {
+            for (const auto& plug : fs::directory_iterator("Data/F4SE/Plugins")) {
+                if (plug.is_directory()) safeScan(plug.path() / "Languages");
+            }
+        } catch (...) {}
+
+        return std::vector<std::string>(found.begin(), found.end());
     }
 
     // ------------------------------------------------------------------

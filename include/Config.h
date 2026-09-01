@@ -55,4 +55,9 @@ class Config {
     // ([Localization] in the INI; see AutoTranslate.h).
     static bool AutoTranslatePlugins;
     static bool CaptureUIStrings;
+
+    // Override the language the framework translates into, independent of the
+    // game's sLanguage. Empty = follow the game. A language code ("de", "ru",
+    // "ptbr", ...). Applied at startup; changing it needs a game restart.
+    static std::string LanguageOverride;
 };

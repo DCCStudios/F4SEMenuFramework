@@ -9,6 +9,7 @@
 #include "GamepadInput.h"
 #include "PauseMenuButton.h"
 #include "MCM/MCMRegistry.h"
+#include "MCM/MCMTranslation.h"
 #include "MCM/MCMPapyrusAPI.h"
 
 namespace Plugin
@@ -131,6 +132,12 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f
     }
 
     Config::Init();
+
+    // Inject the language override as early as the config is known, so the
+    // framework's own strings (Translations::Install below) and any plugin that
+    // resolves its language during load pick it up. ResolveGameLanguage returns
+    // this when set. Re-applied at kGameDataReady for late resolvers.
+    MCMTranslation::SetLanguageOverride(Config::LanguageOverride);
 
     // Register the MCM script natives (MCM.GetModSettingInt etc.) so mods that
     // call the MCM Papyrus API work without the real MCM installed. The

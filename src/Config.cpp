@@ -27,6 +27,7 @@ int Config::GamepadGlyphStyle = 0;
 bool Config::DisableKeyboardWithGamepad = false;
 int Config::PauseMenuButtonPos = 0;
 bool Config::AutoTranslatePlugins = true;
+std::string Config::LanguageOverride = "";
 bool Config::CaptureUIStrings = false;
 
 
@@ -87,6 +88,7 @@ void Config::Init() {
     ini->SetSection("Localization");
     AutoTranslatePlugins = ini->GetBool("AutoTranslate", true);
     CaptureUIStrings = ini->GetBool("CaptureStrings", false);
+    LanguageOverride = ini->GetString("LanguageOverride", "");
     AutoTranslate::SetEnabled(AutoTranslatePlugins);
     AutoTranslate::SetCaptureEnabled(CaptureUIStrings);
 
@@ -170,6 +172,7 @@ void Config::Save() {
     ini->SetSection("Localization");
     ini->SetBool("AutoTranslate", AutoTranslatePlugins);
     ini->SetBool("CaptureStrings", CaptureUIStrings);
+    ini->SetString("LanguageOverride", LanguageOverride.c_str());
 
     // Gamepad Section
     ini->SetSection("Gamepad");

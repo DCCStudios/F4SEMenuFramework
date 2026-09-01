@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <unordered_map>
 #include <filesystem>
 
@@ -28,6 +29,24 @@ namespace MCMTranslation {
     // when running through MO2), then optionalSettingFallback (typically
     // GetINISetting), then "en". Whitespace is trimmed.
     std::string ResolveGameLanguage(const std::string& optionalSettingFallback = {});
+
+    // User override for the framework's translation language, independent of the
+    // game's sLanguage. Empty = follow the game. When set (normalized), it wins
+    // in ResolveGameLanguage, so every translation path (MCM configs, plugin
+    // menus, auto-translate) uses it. Injected from Config at startup so this
+    // unit stays CommonLibF4-free.
+    void SetLanguageOverride(const std::string& lang);
+
+    // Language codes that actually have translation files installed, discovered
+    // by scanning Data/Interface/Translations, Data/MCM/Config/<mod>/Translation
+    // and Data/F4SE/Plugins/<plugin>/Languages against the known Fallout 4
+    // language codes. Sorted, always includes "en". Used to populate the
+    // language dropdown so the user can only pick a language they have files for.
+    std::vector<std::string> GetInstalledLanguages();
+
+    // Friendly display name for a language code ("de" -> "German"); returns the
+    // code itself when unknown.
+    std::string LanguageDisplayName(const std::string& code);
 
     // Returns content unchanged when it is already valid UTF-8. Otherwise the
     // bytes are legacy-codepage text (Korean translation files are commonly

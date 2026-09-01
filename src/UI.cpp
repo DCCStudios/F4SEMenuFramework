@@ -16,6 +16,7 @@
 #include "MCM/MCMWidgetRenderer.h"
 #include "MCM/MCMConflictCheck.h"
 #include "MCM/MCMCategorizerPage.h"  // category-folder styling in the nav tree
+#include "MCM/MCMTranslation.h"      // installed-language discovery for the override
 #include "AutoTranslate.h"
 #include <cctype>
 
@@ -803,6 +804,45 @@ void UI::RenderConfigWindow() {
                     Config::Save();
                     FontManager::RequestReload();
                 }
+            }
+        }
+
+        // --- Language override dropdown ---
+        // Translate the framework's menus into a chosen language regardless of
+        // the game's sLanguage. Only languages with translation files installed
+        // are offered. Scanned once (files don't change mid-session); index 0
+        // ("Game default") clears the override. Applied on the next game launch.
+        {
+            static std::vector<std::string> langCodes = MCMTranslation::GetInstalledLanguages();
+            static std::vector<std::string> langLabels = [] {
+                std::vector<std::string> v;
+                v.push_back(Translations::Get("Settings.Language.GameDefault"));
+                for (const auto& c : langCodes) v.push_back(MCMTranslation::LanguageDisplayName(c));
+                return v;
+            }();
+
+            int langIdx = 0;
+            if (!Config::LanguageOverride.empty()) {
+                for (size_t i = 0; i < langCodes.size(); ++i) {
+                    if (langCodes[i] == Config::LanguageOverride) {
+                        langIdx = static_cast<int>(i) + 1;
+                        break;
+                    }
+                }
+            }
+
+            std::vector<const char*> langPtrs;
+            langPtrs.reserve(langLabels.size());
+            for (const auto& l : langLabels) langPtrs.push_back(l.c_str());
+
+            ImGui::Text(Translations::Get("Settings.Language"));
+            if (ImGui::Combo("##LanguageOverrideCombo", &langIdx, langPtrs.data(),
+                             static_cast<int>(langPtrs.size()))) {
+                Config::LanguageOverride = (langIdx == 0) ? "" : langCodes[langIdx - 1];
+                Config::Save();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", Translations::Get("Settings.Language.Tooltip"));
             }
         }
 
