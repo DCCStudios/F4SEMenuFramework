@@ -245,6 +245,18 @@ namespace F4SEMenuFramework {
         using GetBindingFunction = unsigned int(*)(const char*);
         using SetBindingFunction = void(*)(const char*, unsigned int);
 
+        // ── Key codes: DIK, not VK ───────────────────────────────────────────
+        // Every keyboard `scanCode` / `defaultScanCode` here is a DirectInput
+        // scan code (DIK) — the physical key position, the same numbering the
+        // game and Address Library use. It is NOT a Windows Virtual-Key (VK)
+        // code. They do not match: F1 is DIK 0x3B but VK 0x70; Space is DIK 0x39
+        // but VK 0x20; A is DIK 0x1E but VK 0x41. Passing a VK by mistake binds
+        // the wrong key or nothing, and the framework logs a warning for a code
+        // it does not recognize. Use the named constants in DIK.h (`DIK::F1`,
+        // `DIK::Spacebar`) to stay on the right side of this — do not pass a
+        // `VK_*` value or `MapVirtualKey` result. (Gamepad codes are a different
+        // encoding again — XInput button masks — documented on RegisterGamepad.)
+        //
         // Register a hotkey with a unique string id (e.g. "MyMod.ToggleOverlay"),
         // a default DIK scan code, and a callback to invoke on key press.
         // Returns a handle for later unregister. If the user has already rebound

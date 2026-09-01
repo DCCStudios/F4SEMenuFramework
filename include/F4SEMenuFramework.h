@@ -32,6 +32,11 @@ FUNCTION_PREFIX float GetMenuFrameworkVersion();
 FUNCTION_PREFIX const char* GetToggleKeyName();
 
 // --- Plugin Hotkey API ---
+// Every keyboard `scanCode` / `defaultScanCode` is a DirectInput scan code (DIK),
+// the physical key position — NOT a Windows Virtual-Key (VK) code. They differ
+// (F1 = DIK 0x3B / VK 0x70; Space = DIK 0x39 / VK 0x20), so a VK passed here
+// binds the wrong key. Use the DIK.h constants. Gamepad `configCode`s are XInput
+// button masks instead (4096=A, 256=LB, 9=LT, ...), a separate encoding.
 FUNCTION_PREFIX int64_t RegisterHotkey(const char* id, unsigned int defaultScanCode, HotkeyCallback callback);
 FUNCTION_PREFIX int64_t RegisterGamepadHotkey(const char* id, unsigned int defaultConfigCode, HotkeyCallback callback);
 FUNCTION_PREFIX void UnregisterHotkey(int64_t handle);
