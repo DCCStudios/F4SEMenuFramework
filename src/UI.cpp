@@ -270,8 +270,13 @@ void RenderNode(std::pair<const std::string, UI::MenuTree*>& node, bool ancestor
 
 void __stdcall UI::RenderMenuWindow() {
     auto viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2{0.5f, 0.5f});
-    ImGui::SetNextWindowSize(ImVec2{viewport->Size.x * 0.8f, viewport->Size.y * 0.8f}, ImGuiCond_Appearing);
+    // FirstUseEver (not Appearing): apply the default center + size only the
+    // first time the window exists this session, then leave whatever the user
+    // dragged/resized it to. Reopening the menu keeps their layout. Because
+    // io.IniFilename is null (Hooks.cpp), nothing is written to disk, so a game
+    // restart rebuilds the ImGui context and the window returns to default.
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_FirstUseEver, ImVec2{0.5f, 0.5f});
+    ImGui::SetNextWindowSize(ImVec2{viewport->Size.x * 0.8f, viewport->Size.y * 0.8f}, ImGuiCond_FirstUseEver);
     ImGuiWindowFlags window_flags = 0;
     window_flags |= ImGuiWindowFlags_NoCollapse;
     window_flags |= ImGuiWindowFlags_MenuBar;
@@ -671,9 +676,11 @@ bool ToggleButton(const char* label, bool* v) {
 
 void UI::RenderConfigWindow() {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2{0.5f, 0.5f});
+    // FirstUseEver so a move/resize sticks for the rest of the session but
+    // resets on restart (see RenderMenuWindow for the full rationale).
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_FirstUseEver, ImVec2{0.5f, 0.5f});
     // 0.46 = the original 0.4 default enlarged by 15%
-    ImGui::SetNextWindowSize(ImVec2{viewport->Size.x * 0.46f, viewport->Size.y * 0.46f}, ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2{viewport->Size.x * 0.46f, viewport->Size.y * 0.46f}, ImGuiCond_FirstUseEver);
     ImGuiWindowFlags window_flags = 0;
     window_flags |= ImGuiWindowFlags_NoCollapse;
     window_flags |= ImGuiWindowFlags_MenuBar;
