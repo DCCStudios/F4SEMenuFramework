@@ -22,6 +22,12 @@ class Config {
     static float FontSizeSmall;
     static float FontSizeMedium;
     static float FontSizeBig;
+
+    // UI text scale applied to every framework-rendered glyph via
+    // io.FontGlobalScale (menu, plugin pages, banner). 1.0 = 100%, clamped to
+    // [0.25, 2.0]. Persisted to the INI and applied live each frame.
+    static float TextScale;
+
     static void LoadStyle();
 
     // MCM Backwards Compatibility

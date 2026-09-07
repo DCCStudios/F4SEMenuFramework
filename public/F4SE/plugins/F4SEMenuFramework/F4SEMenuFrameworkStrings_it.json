@@ -7,6 +7,8 @@
   "Settings.Title": "Impostazioni",
   "Settings.MenuStyle": "Tema:",
   "Settings.Font": "Carattere",
+  "Settings.TextScale": "Scala del testo",
+  "Settings.TextScale.Tooltip": "Scala tutto il testo di F4SE Menu Framework dal 25% al 200%. Si applica in tempo reale, per ogni carattere e lingua.",
   "Settings.Language": "Lingua",
   "Settings.Language.GameDefault": "Predefinita del gioco",
   "Settings.Language.Tooltip": "Mostra i menu tradotti del framework (configurazioni MCM e menu dei plugin) in questa lingua invece che in quella del gioco.\nVengono elencate solo le lingue per cui hai installato i file di traduzione.\nHa effetto dopo il riavvio del gioco. Le scritture non latine richiedono anche l'attivazione del carattere corrispondente qui sotto.",

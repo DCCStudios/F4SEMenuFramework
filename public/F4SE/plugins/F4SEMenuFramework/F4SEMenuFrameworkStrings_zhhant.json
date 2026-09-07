@@ -7,6 +7,8 @@
   "Settings.Title": "設定",
   "Settings.MenuStyle": "主題：",
   "Settings.Font": "字型",
+  "Settings.TextScale": "文字縮放",
+  "Settings.TextScale.Tooltip": "將 F4SE Menu Framework 的所有文字在 25% 到 200% 之間縮放。即時生效，適用於所有字型和語言。",
   "Settings.Language": "語言",
   "Settings.Language.GameDefault": "遊戲預設",
   "Settings.Language.Tooltip": "以此語言顯示框架的翻譯選單（MCM 設定和外掛選單），而非遊戲語言。\n僅列出已安裝翻譯檔案的語言。\n重新啟動遊戲後生效。非拉丁文字還需在下方啟用對應字型。",

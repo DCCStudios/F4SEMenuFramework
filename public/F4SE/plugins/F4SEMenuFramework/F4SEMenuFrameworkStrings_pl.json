@@ -7,6 +7,8 @@
   "Settings.Title": "Ustawienia",
   "Settings.MenuStyle": "Motyw:",
   "Settings.Font": "Czcionka",
+  "Settings.TextScale": "Skala tekstu",
+  "Settings.TextScale.Tooltip": "Skaluje cały tekst F4SE Menu Framework od 25% do 200%. Działa na żywo i dotyczy każdej czcionki oraz języka.",
   "Settings.Language": "Język",
   "Settings.Language.GameDefault": "Domyślny z gry",
   "Settings.Language.Tooltip": "Wyświetla przetłumaczone menu frameworka (konfiguracje MCM i menu wtyczek) w tym języku zamiast w języku gry.\nWyświetlane są tylko języki, dla których masz zainstalowane pliki tłumaczeń.\nDziała po ponownym uruchomieniu gry. Pisma niełacińskie wymagają też włączenia odpowiedniej czcionki poniżej.",

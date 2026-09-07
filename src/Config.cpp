@@ -20,6 +20,7 @@ bool Config::EnableThai = false;
 float Config::FontSizeSmall = 16.0f;
 float Config::FontSizeMedium = 32.0f;
 float Config::FontSizeBig = 64.0f;
+float Config::TextScale = 1.0f;
 bool Config::MCMCompatEnabled = true;
 bool Config::MCMCompatWhenNativePresent = true;
 bool Config::ShowCategorizerEditorAlways = false;
@@ -47,6 +48,12 @@ void Config::Init() {
 
     FreezeTimeOnMenu = ini->GetBool("FreezeTimeOnMenu", true);
     BlurBackgroundOnMenu = ini->GetBool("BlurBackgroundOnMenu", true);
+
+    // UI text scale (25%-200%). Clamp a hand-edited INI back into range so a
+    // stray value can't shrink the menu to nothing or blow it up off screen.
+    TextScale = ini->GetFloat("TextScale", 1.0f);
+    if (TextScale < 0.25f) TextScale = 0.25f;
+    if (TextScale > 2.0f) TextScale = 2.0f;
 
     // Pause-menu row placement: 0 = top, 1..N = rows down, -1 = bottom.
     // Clamp anything else back into that range so a hand-edited INI can't
@@ -119,6 +126,7 @@ void Config::Save() {
     ini->SetBool("FreezeTimeOnMenu", FreezeTimeOnMenu);
     ini->SetBool("BlurBackgroundOnMenu", BlurBackgroundOnMenu);
     ini->SetInt("PauseMenuButtonPos", PauseMenuButtonPos);
+    ini->SetFloat("TextScale", TextScale);
 
 
     if (ToggleMode == 0) {

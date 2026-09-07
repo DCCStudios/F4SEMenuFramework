@@ -526,6 +526,13 @@ HRESULT __stdcall Hooks::PresentHook::thunk(IDXGISwapChain* swapChain, UINT sync
         UI::PreNewFrameGamepadSnapshot();
 
         ImGui::NewFrame();
+
+        // Apply the user's UI text scale to every framework-drawn glyph this
+        // frame (menu, plugin pages, welcome banner). FontGlobalScale multiplies
+        // the loaded font size, so it scales all fonts and languages without
+        // rebuilding the atlas, and updates live as the Settings slider moves.
+        ImGui::GetIO().FontGlobalScale = Config::TextScale;
+
         HudManager::Render();
 
         if (WindowManager::IsAnyWindowOpen()) {
@@ -723,6 +730,26 @@ LRESULT Hooks::WndProcHook::thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         if (uMsg == WM_SETCURSOR && LOWORD(lParam) == HTCLIENT) {
             ::SetCursor(nullptr);
             return TRUE;
+        }
+
+        // Window activation / focus messages must reach the GAME even while the
+        // menu is open. The generic path below returns true (swallowing the
+        // message from the game) to block gameplay input, but doing that to
+        // alt-tab focus messages leaves the game never seeing that it lost and
+        // regained foreground: its input and focus state then stays wedged until
+        // the menu is toggled closed. Forward these to ImGui for its own focus
+        // tracking, then pass them through to the game's WndProc instead of
+        // swallowing them.
+        switch (uMsg) {
+            case WM_ACTIVATE:
+            case WM_ACTIVATEAPP:
+            case WM_NCACTIVATE:
+            case WM_SETFOCUS:
+            case WM_KILLFOCUS:
+                ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam);
+                return CallWindowProcA(func, hWnd, uMsg, wParam, lParam);
+            default:
+                break;
         }
 
         // Optional keyboard lock-out while navigating with a controller:

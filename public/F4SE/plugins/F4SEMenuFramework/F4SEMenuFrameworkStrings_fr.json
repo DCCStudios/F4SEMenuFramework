@@ -7,6 +7,8 @@
   "Settings.Title": "Paramètres",
   "Settings.MenuStyle": "Thème :",
   "Settings.Font": "Police",
+  "Settings.TextScale": "Échelle du texte",
+  "Settings.TextScale.Tooltip": "Met à l'échelle tout le texte de F4SE Menu Framework de 25% à 200%. Appliqué en direct, pour toutes les polices et langues.",
   "Settings.Language": "Langue",
   "Settings.Language.GameDefault": "Langue du jeu",
   "Settings.Language.Tooltip": "Affiche les menus traduits du framework (configs MCM et menus de plugins) dans cette langue au lieu de celle du jeu.\nSeules les langues pour lesquelles vous avez installé des fichiers de traduction sont listées.\nPrend effet après un redémarrage du jeu. Les écritures non latines nécessitent aussi d'activer la police correspondante ci-dessous.",

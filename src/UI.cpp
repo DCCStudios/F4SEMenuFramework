@@ -497,6 +497,11 @@ void __stdcall UI::RenderMenuWindow() {
     ImGui::BeginChild("F4SEModControlPanelMenuNode", ImVec2(0, -FLT_MIN), ImGuiChildFlags_Border);
     if (highlightContent) ImGui::PopStyleColor();
 
+    // Wrap text at the pane's right edge so scaled-up labels and page text
+    // (including third-party pages drawn below) flow onto the next line instead
+    // of running off the panel. Short strings are unaffected.
+    ImGui::PushTextWrapPos(0.0f);
+
     // Apply a pending RB pane-switch: focus the content child and init nav on
     // its first widget so D-pad selection starts on the first setting.
     if (s_paneFocusRequest && s_gamepadPane == 1) {
@@ -537,6 +542,7 @@ void __stdcall UI::RenderMenuWindow() {
             display_node->Render();
         }
     }
+    ImGui::PopTextWrapPos();
     ImGui::EndChild();
 
     // Capture the main window rect for the hint bar before End()
@@ -717,6 +723,9 @@ void UI::RenderConfigWindow() {
 
         ImGui::BeginGroup();
         ImGui::PushItemWidth(contentWidth);
+        // Wrap settings labels at the centered content column's right edge so
+        // scaled-up text stays inside the column instead of overrunning it.
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + contentWidth);
 
         // ... all your combo boxes and settings ...
 
@@ -811,6 +820,29 @@ void UI::RenderConfigWindow() {
                     Config::Save();
                     FontManager::RequestReload();
                 }
+            }
+        }
+
+        // --- Text scale ---
+        // Scales all framework-rendered text (25%-200%). Applied live every
+        // frame through io.FontGlobalScale (see Hooks), so it updates as you
+        // drag and covers every font and language. Saved on release.
+        {
+            int pct = static_cast<int>(Config::TextScale * 100.0f + 0.5f);
+            ImGui::Text(Translations::Get("Settings.TextScale"));
+            // No SetNextItemWidth: inherit the group's PushItemWidth(contentWidth)
+            // so the slider matches the Font/Language combos instead of stretching
+            // to the panel edge.
+            if (ImGui::SliderInt("##TextScaleSlider", &pct, 25, 200, "%d%%")) {
+                if (pct < 25) pct = 25;
+                if (pct > 200) pct = 200;
+                Config::TextScale = static_cast<float>(pct) / 100.0f;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                Config::Save();  // persist once, not every drag frame
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", Translations::Get("Settings.TextScale.Tooltip"));
             }
         }
 
@@ -1106,6 +1138,7 @@ void UI::RenderConfigWindow() {
             ImGui::SetTooltip("%s", Translations::Get("Settings.Gamepad.DisableKeyboard.Tooltip"));
         }
         ImGui::PopItemWidth();
+        ImGui::PopTextWrapPos();
 
         ImGui::EndGroup();      // ADDED: End the group
     }

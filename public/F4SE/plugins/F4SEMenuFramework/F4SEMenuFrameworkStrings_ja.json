@@ -7,6 +7,8 @@
   "Settings.Title": "設定",
   "Settings.MenuStyle": "テーマ:",
   "Settings.Font": "フォント",
+  "Settings.TextScale": "テキストの拡大率",
+  "Settings.TextScale.Tooltip": "F4SE Menu Framework のすべてのテキストを 25%〜200% で拡大縮小します。変更は即座に反映され、すべてのフォントと言語に適用されます。",
   "Settings.Language": "言語",
   "Settings.Language.GameDefault": "ゲームの既定",
   "Settings.Language.Tooltip": "フレームワークの翻訳メニュー（MCM 設定とプラグインメニュー）を、ゲームの言語ではなくこの言語で表示します。\n翻訳ファイルがインストールされている言語のみが表示されます。\n変更はゲーム再起動後に反映されます。非ラテン文字には下の対応フォントの有効化も必要です。",
