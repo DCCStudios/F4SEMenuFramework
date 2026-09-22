@@ -19,5 +19,6 @@
     "nlohmann-json",
     "rsm-mmio",
     "zlib"
-  ]
+  ],
+  "builtin-baseline": "40f3c709db80acf154ac4b17a1f83c564ebd022e"
 }
