@@ -259,6 +259,12 @@ void Hooks::CreateDeviceHook::install() {
 
     int patched = 0;
     if (auto* slot = FindGameIATSlot("d3d11.dll", "D3D11CreateDeviceAndSwapChain")) {
+        // Chain the slot's current value so a hook installed earlier (for
+        // example at F4SE Preload) stays in the call path. Unhooked, it is
+        // the d3d11 export itself, so behavior is unchanged.
+        if (*slot && *slot != reinterpret_cast<std::uintptr_t>(&thunk)) {
+            originalFunc = reinterpret_cast<FnCreateDeviceAndSwapChain>(*slot);
+        }
         REL::WriteSafeData(reinterpret_cast<std::uintptr_t>(slot),
             reinterpret_cast<std::uintptr_t>(&thunk));
         ++patched;
